@@ -113,8 +113,9 @@ return [
             '/^\s*revert\s+"?revert\b/i',
         ],
 
-        // Ordered list of {title, summary, patterns[]}; the first match wins
-        // and anything unmatched lands in "General Improvements".
+        // Ordered list of {title, summary, patterns[], short?}; the first
+        // match wins and anything unmatched lands in "General Improvements".
+        // `short` is the label used in headlines ("New in Editor and Billing").
         'feature_groups' => [],
 
         // Extra imperative verbs (base form) per section, added on top of the
@@ -146,6 +147,7 @@ return [
             'max_items_in_modal' => 9,
             'initial_range_commits' => 25,
             'manual_history_releases' => 1,
+            'headline_areas' => 3,
         ],
 
         // Null headline/summary resolve to "{app.name} has been updated" and

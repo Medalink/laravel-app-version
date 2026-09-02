@@ -2,11 +2,15 @@
 
 namespace Medalink\AppVersion\Tests\Fixtures;
 
+use Carbon\CarbonInterface;
 use Medalink\AppVersion\Contracts\ReleaseCommitSource;
 use RuntimeException;
 
 class FakeReleaseCommitSource implements ReleaseCommitSource
 {
+    /** @var array<string, CarbonInterface> ref => committer date */
+    public array $dates = [];
+
     /** @var list<array{version: string, commit: string}> */
     public array $history = [];
 
@@ -44,5 +48,10 @@ class FakeReleaseCommitSource implements ReleaseCommitSource
     public function tagCommit(string $version): ?string
     {
         return $this->tags[$version] ?? null;
+    }
+
+    public function commitDate(string $ref): ?CarbonInterface
+    {
+        return $this->dates[$ref] ?? null;
     }
 }

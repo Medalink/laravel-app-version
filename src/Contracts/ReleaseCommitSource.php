@@ -2,6 +2,8 @@
 
 namespace Medalink\AppVersion\Contracts;
 
+use Carbon\CarbonInterface;
+
 interface ReleaseCommitSource
 {
     /**
@@ -22,4 +24,10 @@ interface ReleaseCommitSource
     public function currentCommit(): ?string;
 
     public function tagCommit(string $version): ?string;
+
+    /**
+     * Committer date of a ref, used as the published date of backfilled
+     * releases so history carries real dates rather than the backfill time.
+     */
+    public function commitDate(string $ref): ?CarbonInterface;
 }

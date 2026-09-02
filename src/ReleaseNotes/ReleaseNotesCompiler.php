@@ -155,12 +155,14 @@ class ReleaseNotesCompiler
             return $this->fallback($warnings);
         }
 
+        $featureGroups = $this->featureGroups($sections, $matchTexts);
+
         return [
-            'headline' => $this->buildHeadline($sections),
+            'headline' => $this->buildHeadline($sections, $featureGroups),
             'summary' => $this->buildSummary($sections),
             'sections' => $sections,
             'summary_sections' => $this->summarySections($sections),
-            'feature_groups' => $this->featureGroups($sections, $matchTexts),
+            'feature_groups' => $featureGroups,
             'item_count' => $itemCount,
             'generation_mode' => ReleaseNote::GENERATION_MODE_PARSED,
             'generation_warnings' => array_values($warnings),
@@ -240,6 +242,7 @@ class ReleaseNotesCompiler
 
             $groups[(string) $group['title']] = [
                 'title' => (string) $group['title'],
+                'short' => (string) ($group['short'] ?? $group['title']),
                 'summary' => (string) ($group['summary'] ?? ''),
                 'patterns' => $group['patterns'] ?? [],
                 'sections' => ReleaseNote::emptySections(),
@@ -248,6 +251,7 @@ class ReleaseNotesCompiler
 
         $groups[self::GENERAL_GROUP_TITLE] ??= [
             'title' => self::GENERAL_GROUP_TITLE,
+            'short' => self::GENERAL_GROUP_TITLE,
             'summary' => 'Additional changes, fixes, and polish.',
             'patterns' => [],
             'sections' => ReleaseNote::emptySections(),
@@ -611,10 +615,34 @@ class ReleaseNotesCompiler
     }
 
     /**
+     * Name the release by its busiest feature areas ("New features and
+     * fixes in Editor, Intelligence and Projects"); the generic phrasing
+     * only remains for releases with no configured areas hit.
+     *
      * @param  Sections  $sections
+     * @param  list<FeatureGroup>  $featureGroups
      */
-    protected function buildHeadline(array $sections): string
+    protected function buildHeadline(array $sections, array $featureGroups = []): string
     {
+        $areas = collect($featureGroups)
+            ->reject(static fn (array $group): bool => $group['title'] === self::GENERAL_GROUP_TITLE)
+            ->sortByDesc('item_count')
+            ->take((int) $this->config('limits.headline_areas', 3))
+            ->map(static fn (array $group): string => (string) ($group['short'] ?? $group['title']))
+            ->values()
+            ->all();
+
+        if ($areas !== []) {
+            $list = Arr::join($areas, ', ', ' and ');
+
+            return match (true) {
+                $sections[ReleaseNote::SECTION_NEW] !== [] && $sections[ReleaseNote::SECTION_FIXED] !== [] => "New features and fixes in {$list}",
+                $sections[ReleaseNote::SECTION_NEW] !== [] => "New in {$list}",
+                $sections[ReleaseNote::SECTION_FIXED] !== [] => "Fixes across {$list}",
+                default => "Improvements to {$list}",
+            };
+        }
+
         $app = $this->appName();
 
         return match (true) {

@@ -30,6 +30,18 @@ it('merges VERSION file history with semver tags, tags winning, newest first', f
     ]);
 });
 
+it('reads committer dates for refs', function (): void {
+    Process::fake([
+        'git log -1 --format=%cI abc123' => Process::result(output: "2026-08-24T18:30:00+02:00\n"),
+        'git log -1 --format=%cI missing' => Process::result(exitCode: 128),
+    ]);
+
+    $source = new GitReleaseCommitSource;
+
+    expect($source->commitDate('abc123')?->toIso8601String())->toBe('2026-08-24T18:30:00+02:00')
+        ->and($source->commitDate('missing'))->toBeNull();
+});
+
 it('adds the running version at HEAD when neither file history nor tags know it', function (): void {
     $this->writeVersionJson('0.3.0');
 

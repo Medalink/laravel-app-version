@@ -77,8 +77,23 @@ class ReleaseNotesPublisher
             'previous_version' => $previousVersion,
             'source_commit' => $sourceCommit,
             'source_range' => $fromRef !== null ? "{$fromRef}..{$toRef}" : $toRef,
-            'published_at' => Carbon::now(),
+            'published_at' => $this->publishedAt($version, $sourceCommit),
         ]);
+    }
+
+    /**
+     * The running version publishes "now" (a deploy just happened); older
+     * versions are being backfilled and keep their boundary commit's date.
+     */
+    protected function publishedAt(string $version, ?string $sourceCommit): Carbon
+    {
+        if ($version === AppVersion::version() || $sourceCommit === null) {
+            return Carbon::now();
+        }
+
+        $date = $this->commitSource->commitDate($sourceCommit);
+
+        return $date === null ? Carbon::now() : Carbon::instance($date);
     }
 
     public function publish(string $version, bool $strict = false, ?string $fromVersionOverride = null): ReleaseNote

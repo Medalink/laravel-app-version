@@ -2,11 +2,14 @@
 
 namespace Medalink\AppVersion\Git;
 
+use Carbon\CarbonInterface;
+use Illuminate\Support\Carbon;
 use Illuminate\Support\Facades\Process;
 use Medalink\AppVersion\AppVersion;
 use Medalink\AppVersion\Contracts\ReleaseCommitSource;
 use Medalink\AppVersion\Support\SemanticVersion;
 use RuntimeException;
+use Throwable;
 
 /**
  * Version boundaries come from two places, merged and sorted newest first:
@@ -77,6 +80,21 @@ class GitReleaseCommitSource implements ReleaseCommitSource
     public function tagCommit(string $version): ?string
     {
         return $this->runTrimmed('git rev-list -n 1 '.SemanticVersion::tag($version));
+    }
+
+    public function commitDate(string $ref): ?CarbonInterface
+    {
+        $date = $this->runTrimmed(sprintf('git log -1 --format=%%cI %s', $ref));
+
+        if ($date === null) {
+            return null;
+        }
+
+        try {
+            return Carbon::parse($date);
+        } catch (Throwable) {
+            return null;
+        }
     }
 
     /**

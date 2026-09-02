@@ -178,6 +178,27 @@ it('groups by feature area matching the raw subject as well as the rewritten sen
         ->and($compiled['feature_groups'][2]['item_count'])->toBe(1);
 });
 
+it('names the release after its busiest feature areas, using short labels when configured', function (): void {
+    config()->set('app-version.release_notes.feature_groups', [
+        ['title' => 'Editor & Writing', 'short' => 'Editor', 'summary' => '', 'patterns' => ['/\beditor\b/i']],
+        ['title' => 'Intelligence', 'summary' => '', 'patterns' => ['/\b(ai|model)\b/i']],
+        ['title' => 'Projects & Workspaces', 'short' => 'Projects', 'summary' => '', 'patterns' => ['/\bproject\b/i']],
+        ['title' => 'Billing & Account', 'short' => 'Billing', 'summary' => '', 'patterns' => ['/\bbilling\b/i']],
+    ]);
+
+    $mixed = compileNotes([
+        'Add editor focus mode', 'Fix editor autosave', 'Add a model picker', 'Fix project rename',
+        'Fix project archive', 'Improve billing copy', 'Improve onboarding copy',
+    ]);
+
+    expect($mixed['headline'])->toBe('New features and fixes in Editor, Projects and Intelligence');
+
+    expect(compileNotes(['Add editor focus mode'])['headline'])->toBe('New in Editor')
+        ->and(compileNotes(['Fix editor autosave', 'Fix billing totals'])['headline'])->toBe('Fixes across Editor and Billing')
+        ->and(compileNotes(['Improve the editor toolbar'])['headline'])->toBe('Improvements to Editor')
+        ->and(compileNotes(['Improve onboarding copy'])['headline'])->toBe('Sample has been improved');
+});
+
 it('adds configured section verbs on top of the built-in lexicon', function (): void {
     config()->set('app-version.release_notes.section_prefixes', [ReleaseNote::SECTION_NEW => ['unveil']]);
 

@@ -1,5 +1,6 @@
 <?php
 
+use Illuminate\Support\Carbon;
 use Medalink\AppVersion\Contracts\ReleaseCommitSource;
 use Medalink\AppVersion\Models\ReleaseNote;
 use Medalink\AppVersion\Tests\Fixtures\FakeReleaseCommitSource;
@@ -160,6 +161,22 @@ it('falls back to a tag or stored commit when git has no VERSION boundary for th
 
     expect(ReleaseNote::forVersion('2.0.3')?->previous_version)->toBe('2.0.2')
         ->and(ReleaseNote::forVersion('2.0.3')?->source_range)->toBe('stored-202..HEAD');
+});
+
+it('dates backfilled releases by their boundary commit and the running version by now', function (): void {
+    $this->writeVersionJson('0.2.0');
+    $this->travelTo('2026-09-02 15:00:00');
+    $this->source->history = [
+        ['version' => '0.2.0', 'commit' => 'c020'],
+        ['version' => '0.1.0', 'commit' => 'c010'],
+    ];
+    $this->source->dates['c010'] = Carbon::parse('2026-08-24T18:30:00+00:00');
+    $this->source->dates['head-commit'] = Carbon::parse('2026-08-01T00:00:00+00:00');
+
+    $this->artisan('app:release-notes:backfill', ['--from' => '0.1.0', '--to' => '0.2.0', '--force' => true])->assertSuccessful();
+
+    expect(ReleaseNote::forVersion('0.1.0')?->published_at?->toIso8601String())->toBe('2026-08-24T18:30:00+00:00')
+        ->and(ReleaseNote::forVersion('0.2.0')?->published_at?->toDateTimeString())->toBe('2026-09-02 15:00:00');
 });
 
 it('gives the oldest version no previous boundary even when newer releases are stored', function (): void {
