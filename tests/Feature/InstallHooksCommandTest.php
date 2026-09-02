@@ -21,7 +21,9 @@ it('creates every configured hook with the managed block', function (): void {
 
         expect($contents)->toStartWith('#!/usr/bin/env sh')
             ->and($contents)->toContain(InstallHooksCommand::BEGIN_MARKER)
-            ->and($contents)->toContain('php artisan app:version --no-interaction --quiet')
+            ->and($contents)->toContain('artisan app:version --no-interaction --quiet')
+            ->and($contents)->toContain('command -v php')
+            ->and($contents)->toContain(str_replace('\\', '/', PHP_BINARY))
             ->and($contents)->toContain(InstallHooksCommand::END_MARKER);
     }
 });

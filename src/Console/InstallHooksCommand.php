@@ -53,12 +53,20 @@ class InstallHooksCommand extends Command
         return self::SUCCESS;
     }
 
-    public static function managedBlock(): string
+    /**
+     * Hooks inherit the PATH of whatever committed (an IDE, a GUI client, an
+     * agent shell), which often lacks php. Prefer php from PATH but fall back
+     * to the interpreter that ran the installer, baked in as an absolute path.
+     */
+    public static function managedBlock(?string $phpBinary = null): string
     {
+        $fallback = str_replace('\\', '/', $phpBinary ?? PHP_BINARY);
+
         return implode("\n", [
             self::BEGIN_MARKER,
             'if [ -f artisan ]; then',
-            '    php artisan app:version --no-interaction --quiet >/dev/null 2>&1 || true',
+            '    APP_VERSION_PHP="$(command -v php 2>/dev/null || printf \'%s\' \''.$fallback.'\')"',
+            '    "$APP_VERSION_PHP" artisan app:version --no-interaction --quiet >/dev/null 2>&1 || true',
             'fi',
             self::END_MARKER,
         ]);
