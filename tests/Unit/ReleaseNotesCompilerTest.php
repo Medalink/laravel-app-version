@@ -39,6 +39,27 @@ it('past-tenses verbs after conjunctions and leaves unknown leading words alone'
     ]);
 });
 
+it('leaves titled noun phrases and verbs after causatives alone, and conjugates un-/re- prefixed verbs', function (): void {
+    $compiled = compileNotes([
+        'Prompt audit: native JSON schemas for research lanes',
+        'Make pm2 see artisan crashes and wait for services',
+        'Unclip the version tooltip and reattach the banner',
+    ]);
+
+    expect($compiled['sections'][ReleaseNote::SECTION_IMPROVED])->toBe([
+        'Prompt audit: native JSON schemas for research lanes.',
+        'Unclipped the version tooltip and reattached the banner.',
+    ])->and($compiled['sections'][ReleaseNote::SECTION_FIXED])->toBe([
+        'Made pm2 see artisan crashes and wait for services.',
+    ]);
+});
+
+it('pluralises the summary counts properly', function (): void {
+    $compiled = compileNotes(['Fix one', 'Fix two', 'Add a thing', 'Improve x', 'Improve y']);
+
+    expect($compiled['summary'])->toBe('This release includes 1 new feature, 2 improvements, 2 fixes.');
+});
+
 it('keeps subjects as written in imperative voice', function (): void {
     config()->set('app-version.release_notes.voice', ReleaseNotesCompiler::VOICE_IMPERATIVE);
 
@@ -86,7 +107,7 @@ it('treats fix signals and fixing verbs as fixes even without a fix verb up fron
     ]);
 
     expect($compiled['sections'][ReleaseNote::SECTION_FIXED])->toBe([
-        'Made pm2 see artisan crashes and waited for services before booting workers.',
+        'Made pm2 see artisan crashes and wait for services before booting workers.',
         'Stopped the collaboration connection flap.',
         'Narrowed undefined regex matches so the strict build passes.',
     ])->and($compiled['sections'][ReleaseNote::SECTION_IMPROVED])->toBe(['Kept settings buttons on one line.']);

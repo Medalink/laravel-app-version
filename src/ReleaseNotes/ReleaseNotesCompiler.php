@@ -83,6 +83,8 @@ class ReleaseNotesCompiler
         'recycle', 'dedupe', 'deduplicate', 'unblock', 'speedup', 'accelerate',
         'coalesce', 'reorder', 'reorganize', 'reorganise', 'restructure', 'relocate',
         'repoint', 'reword', 'rephrase', 'shorten', 'lengthen', 'rebase', 'squash',
+        'clip', 'crop', 'mask', 'clamp', 'pin', 'dock', 'undock', 'suppress', 'mute',
+        'silence', 'quiet', 'tidy', 'declutter', 'compact', 'condense',
     ];
 
     /** @var array<string, string> irregular or double-consonant past tenses */
@@ -464,15 +466,26 @@ class ReleaseNotesCompiler
             return $text;
         }
 
-        $known = $this->allVerbs();
-        $words = explode(' ', $text);
-        $first = strtolower(rtrim($words[0], ',;:'));
-
-        if (! in_array($first, $known, true)) {
+        // "Prompt audit: native JSON schemas" is a titled noun phrase, not
+        // an instruction to prompt something.
+        if (preg_match('/^\S+ \S+:/', $text)) {
             return $text;
         }
 
-        $words[0] = self::pastTense($first);
+        $words = explode(' ', $text);
+        $first = $this->knownVerb(rtrim($words[0], ',;:'));
+
+        if ($first === null) {
+            return $text;
+        }
+
+        $words[0] = $this->conjugate($first);
+
+        // After a causative ("make X wait", "let Y run") the later verbs are
+        // bare infinitives and must stay that way.
+        if (in_array(strtolower($first), ['make', 'let', 'have', 'help'], true)) {
+            return implode(' ', $words);
+        }
 
         foreach ($words as $index => $word) {
             if ($index === 0) {
@@ -481,21 +494,77 @@ class ReleaseNotesCompiler
 
             $previous = strtolower(rtrim($words[$index - 1], ','));
             $conjunction = $previous === 'and' || $previous === 'then' || str_ends_with($words[$index - 1], ',');
-            $candidate = strtolower(rtrim($word, ',;:'));
+            $candidate = $this->knownVerb(rtrim($word, ',;:'));
 
-            if ($conjunction && in_array($candidate, $known, true) && $candidate !== 'new') {
-                $words[$index] = self::pastTense($candidate).substr($word, strlen($candidate));
+            if ($conjunction && $candidate !== null && strtolower($candidate) !== 'new') {
+                $words[$index] = $this->conjugate($candidate).substr($word, strlen($candidate));
             }
         }
 
         return implode(' ', $words);
     }
 
+    /**
+     * The word itself when it is a lexicon verb, including un-/re- prefixed
+     * forms of one ("unclip", "reattach"). Returns the original casing.
+     */
+    protected function knownVerb(string $word): ?string
+    {
+        $lower = strtolower($word);
+
+        if ($lower === '' || preg_match('/[^a-z-]/', $lower)) {
+            return null;
+        }
+
+        $known = $this->allVerbs();
+
+        if (in_array($lower, $known, true)) {
+            return $word;
+        }
+
+        foreach (['un', 're'] as $prefix) {
+            if (strlen($lower) > strlen($prefix) + 2 && str_starts_with($lower, $prefix) && in_array(substr($lower, strlen($prefix)), $known, true)) {
+                return $word;
+            }
+        }
+
+        return null;
+    }
+
+    protected function conjugate(string $verb): string
+    {
+        $lower = strtolower($verb);
+
+        if (in_array($lower, $this->allVerbs(), true)) {
+            return self::pastTense($lower);
+        }
+
+        foreach (['un', 're'] as $prefix) {
+            if (str_starts_with($lower, $prefix) && in_array(substr($lower, strlen($prefix)), $this->allVerbs(), true)) {
+                return $prefix.self::pastTense(substr($lower, strlen($prefix)));
+            }
+        }
+
+        return self::pastTense($lower);
+    }
+
     protected function leadingVerb(string $text): ?string
     {
-        $first = strtolower((string) preg_replace('/[^a-z].*$/i', '', explode(' ', $text)[0]));
+        $verb = $this->knownVerb((string) preg_replace('/[^a-z-].*$/i', '', explode(' ', $text)[0]));
 
-        return in_array($first, $this->allVerbs(), true) ? $first : null;
+        if ($verb === null) {
+            return null;
+        }
+
+        $lower = strtolower($verb);
+
+        foreach (['un', 're'] as $prefix) {
+            if (! in_array($lower, $this->allVerbs(), true) && str_starts_with($lower, $prefix)) {
+                return substr($lower, strlen($prefix));
+            }
+        }
+
+        return $lower;
     }
 
     protected function stripLeadingVerb(string $text): string
@@ -562,20 +631,20 @@ class ReleaseNotesCompiler
     protected function buildSummary(array $sections): string
     {
         $labels = [
-            ReleaseNote::SECTION_NEW => 'new feature',
-            ReleaseNote::SECTION_IMPROVED => 'improvement',
-            ReleaseNote::SECTION_FIXED => 'fix',
+            ReleaseNote::SECTION_NEW => ['new feature', 'new features'],
+            ReleaseNote::SECTION_IMPROVED => ['improvement', 'improvements'],
+            ReleaseNote::SECTION_FIXED => ['fix', 'fixes'],
         ];
         $parts = [];
 
-        foreach ($labels as $section => $label) {
+        foreach ($labels as $section => [$singular, $plural]) {
             $count = count($sections[$section]);
 
             if ($count === 0) {
                 continue;
             }
 
-            $parts[] = sprintf('%s %s%s', number_format($count), $label, $count === 1 ? '' : 's');
+            $parts[] = sprintf('%s %s', number_format($count), $count === 1 ? $singular : $plural);
         }
 
         if ($parts === []) {
