@@ -72,6 +72,23 @@ it('counts builds from the last VERSION change when there are no tags', function
     Process::assertRan(fn (PendingProcess $process): bool => $process->command === 'git rev-list --count version-file-sha..HEAD');
 });
 
+it('reports build zero with empty build stats when VERSION was never committed and no tag exists', function (): void {
+    fakeGit(['git log --format=%H -1 -- VERSION' => '']);
+    $this->writeVersionFile('0.1.0');
+
+    $this->artisan('app:version')->assertSuccessful();
+
+    expect(generatedJson())->toMatchArray(['version' => '0.1.0', 'build' => 0, 'full' => '0.1.0.0+abc1234'])
+        ->and(generatedJson()['stats'])->toMatchArray([
+            'total_commits' => 120,
+            'build_additions' => 0,
+            'build_deletions' => 0,
+            'lifetime_additions' => 1000,
+        ]);
+
+    Process::assertNotRan(fn (PendingProcess $process): bool => str_starts_with($process->command, 'git log --format= --numstat HEAD'));
+});
+
 it('uses an exact semver tag on HEAD as build zero and ranges stats from the previous tag', function (): void {
     fakeGit([
         'git tag --points-at HEAD*' => "v1.4.0\n",

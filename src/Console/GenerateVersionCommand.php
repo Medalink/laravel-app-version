@@ -34,7 +34,9 @@ class GenerateVersionCommand extends Command
 
         $commit = $this->runTrimmed('git rev-parse --short HEAD') ?? 'unknown';
         $release = $this->resolveRelease($fallbackVersion);
-        $build = $release['exact_tag'] ? 0 : (int) ($this->runTrimmed("git rev-list --count {$release['build_range']}") ?? '0');
+        $build = $release['exact_tag'] || $release['build_range'] === null
+            ? 0
+            : (int) ($this->runTrimmed("git rev-list --count {$release['build_range']}") ?? '0');
         $version = $release['version'];
         $full = "{$version}.{$build}+{$commit}";
 
@@ -76,14 +78,16 @@ class GenerateVersionCommand extends Command
      * production metadata before VERSION is bumped. A tag on HEAD is build 0;
      * otherwise builds count from the newest reachable tag, unless VERSION is
      * ahead of it (a bump not yet tagged), in which case builds count from the
-     * commit that last touched VERSION.
+     * commit that last touched VERSION. With no tag and VERSION never
+     * committed there is no boundary at all: build 0 and empty build stats,
+     * rather than counting the whole history as one build.
      *
-     * @return array{version: string, build_range: string, stats_range: string, exact_tag: bool}
+     * @return array{version: string, build_range: string|null, stats_range: string|null, exact_tag: bool}
      */
     protected function resolveRelease(string $fallbackVersion): array
     {
         $versionFileCommit = $this->runTrimmed('git log --format=%H -1 -- '.AppVersion::versionFileRelativePath());
-        $versionFileRange = $versionFileCommit !== null ? "{$versionFileCommit}..HEAD" : 'HEAD';
+        $versionFileRange = $versionFileCommit !== null ? "{$versionFileCommit}..HEAD" : null;
         $exactTag = $this->exactSemverTagAtHead();
 
         if ($exactTag !== null) {
@@ -151,10 +155,12 @@ class GenerateVersionCommand extends Command
     /**
      * @return array{total_commits: int, commit_additions: int, commit_deletions: int, build_additions: int, build_deletions: int, lifetime_additions: int, lifetime_deletions: int}
      */
-    protected function gatherStats(string $buildRange): array
+    protected function gatherStats(?string $buildRange): array
     {
         [$commitAdditions, $commitDeletions] = $this->sumNumstat('git log --format= --numstat -1 HEAD');
-        [$buildAdditions, $buildDeletions] = $this->sumNumstat("git log --format= --numstat {$buildRange}");
+        [$buildAdditions, $buildDeletions] = $buildRange === null
+            ? [0, 0]
+            : $this->sumNumstat("git log --format= --numstat {$buildRange}");
         [$lifetimeAdditions, $lifetimeDeletions] = $this->sumNumstat('git log --format= --numstat');
 
         return [
