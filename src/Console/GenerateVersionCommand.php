@@ -45,6 +45,8 @@ class GenerateVersionCommand extends Command
             'build' => $build,
             'commit' => $commit,
             'full' => $full,
+            'committed_at' => $this->runTrimmed('git log -1 --format=%cI HEAD'),
+            'first_commit_at' => $this->firstCommitAt(),
             'stats' => $this->gatherStats($release['stats_range']),
         ];
 
@@ -56,7 +58,7 @@ class GenerateVersionCommand extends Command
         $this->info("Version: {$full}");
         $this->table(
             ['Field', 'Value'],
-            collect($data)->except('stats')->map(static fn ($value, $key): array => [$key, (string) $value])->values()->all(),
+            collect($data)->except('stats')->map(static fn ($value, $key): array => [$key, (string) ($value ?? '-')])->values()->all(),
         );
 
         $stats = $data['stats'];
@@ -201,6 +203,24 @@ class GenerateVersionCommand extends Command
         }
 
         return [$additions, $deletions];
+    }
+
+    /**
+     * The oldest root commit's date; a repository can have several roots
+     * (grafted histories, subtree merges), so take the earliest.
+     */
+    protected function firstCommitAt(): ?string
+    {
+        $output = $this->runTrimmed('git log --max-parents=0 --format=%cI HEAD');
+
+        if ($output === null) {
+            return null;
+        }
+
+        $dates = array_filter(array_map('trim', preg_split('/\R+/', $output) ?: []));
+        sort($dates);
+
+        return $dates[0] ?? null;
     }
 
     protected function runTrimmed(string $command): ?string

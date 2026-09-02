@@ -86,6 +86,26 @@ class AppVersion
     }
 
     /**
+     * ISO-8601 committer date of HEAD when generated from git, else null.
+     */
+    public static function committedAt(): ?string
+    {
+        $value = self::data()['committed_at'] ?? null;
+
+        return is_string($value) && $value !== '' ? $value : null;
+    }
+
+    /**
+     * ISO-8601 committer date of the repository's first commit, else null.
+     */
+    public static function firstCommitAt(): ?string
+    {
+        $value = self::data()['first_commit_at'] ?? null;
+
+        return is_string($value) && $value !== '' ? $value : null;
+    }
+
+    /**
      * @return array{total_commits: int, commit_additions: int, commit_deletions: int, build_additions: int, build_deletions: int, lifetime_additions: int, lifetime_deletions: int}
      */
     public static function stats(): array
@@ -98,7 +118,7 @@ class AppVersion
     /**
      * Everything a client needs to render the version and its breakdown.
      *
-     * @return array{version: string, build: int, commit: string, full: string, stats: array{total_commits: int, commit_additions: int, commit_deletions: int, build_additions: int, build_deletions: int, lifetime_additions: int, lifetime_deletions: int}}
+     * @return array{version: string, build: int, commit: string, full: string, committedAt: string|null, firstCommitAt: string|null, stats: array{total_commits: int, commit_additions: int, commit_deletions: int, build_additions: int, build_deletions: int, lifetime_additions: int, lifetime_deletions: int}}
      */
     public static function toArray(): array
     {
@@ -107,6 +127,8 @@ class AppVersion
             'build' => self::build(),
             'commit' => self::commit(),
             'full' => self::full(),
+            'committedAt' => self::committedAt(),
+            'firstCommitAt' => self::firstCommitAt(),
             'stats' => self::stats(),
         ];
     }

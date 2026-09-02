@@ -19,6 +19,8 @@ function fakeGit(array $overrides = []): void
             'git describe * --abbrev=0 HEAD~1' => '',
             'git describe * --abbrev=0' => '',
             'git rev-list --count HEAD' => '120',
+            'git log -1 --format=%cI HEAD' => "2026-09-02T13:00:00-05:00\n",
+            'git log --max-parents=0 --format=%cI HEAD' => "2026-08-21T09:00:00-05:00\n2026-08-19T08:00:00-05:00\n",
             'git rev-list --count *' => '7',
             'git log --format= --numstat -1 HEAD' => "10\t2\tapp/a.php\n-\t-\tpublic/logo.png\n",
             'git log --format= --numstat version-file-sha..HEAD' => "50\t5\tapp/a.php\n",
@@ -59,6 +61,8 @@ it('counts builds from the last VERSION change when there are no tags', function
         'build' => 7,
         'commit' => 'abc1234',
         'full' => '1.5.0.7+abc1234',
+        'committed_at' => '2026-09-02T13:00:00-05:00',
+        'first_commit_at' => '2026-08-19T08:00:00-05:00',
     ])->and(generatedJson()['stats'])->toBe([
         'total_commits' => 120,
         'commit_additions' => 10,

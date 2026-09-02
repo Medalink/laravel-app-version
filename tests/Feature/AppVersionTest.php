@@ -46,10 +46,20 @@ it('exposes a client payload with stats', function (): void {
 
     $payload = AppVersion::toArray();
 
-    expect($payload)->toHaveKeys(['version', 'build', 'commit', 'full', 'stats'])
+    expect($payload)->toHaveKeys(['version', 'build', 'commit', 'full', 'committedAt', 'firstCommitAt', 'stats'])
+        ->and($payload['committedAt'])->toBeNull()
+        ->and($payload['firstCommitAt'])->toBeNull()
         ->and($payload['stats']['total_commits'])->toBe(500)
         ->and($payload['stats']['build_additions'])->toBe(100)
         ->and($payload['stats']['lifetime_deletions'])->toBe(0);
+});
+
+it('exposes the commit dates when the JSON carries them', function (): void {
+    $this->writeVersionJson('1.0.0', ['committed_at' => '2026-09-02T13:00:00-05:00', 'first_commit_at' => '2026-08-19T08:00:00-05:00']);
+
+    expect(AppVersion::committedAt())->toBe('2026-09-02T13:00:00-05:00')
+        ->and(AppVersion::firstCommitAt())->toBe('2026-08-19T08:00:00-05:00')
+        ->and(AppVersion::toArray()['firstCommitAt'])->toBe('2026-08-19T08:00:00-05:00');
 });
 
 it('caches the file read for the process until cleared', function (): void {
