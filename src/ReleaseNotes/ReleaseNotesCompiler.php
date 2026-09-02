@@ -9,13 +9,112 @@ use Medalink\AppVersion\Models\ReleaseNote;
 /**
  * Turns raw commit subjects into user-facing release note sections.
  *
+ * Pipeline per subject: drop noise (ignore patterns), parse conventional
+ * prefixes and breaking markers, tidy the text (refs, backticks, ticket
+ * keys), classify into New / Improved / Fixed (type, then leading verb,
+ * then fix-signal keywords), rewrite into the configured voice, de-duplicate,
+ * then group by feature area against both the raw and rewritten text.
+ *
  * @phpstan-type Sections array{new: list<string>, improved: list<string>, fixed: list<string>}
  * @phpstan-type FeatureGroup array{title: string, summary: string, sections: Sections, item_count: int}
  * @phpstan-type Compiled array{headline: string, summary: string, sections: Sections, summary_sections: Sections, feature_groups: list<FeatureGroup>, item_count: int, generation_mode: string, generation_warnings: list<string>}
+ * @phpstan-type Parsed array{text: string, raw: string, type: string|null, scope: string|null, breaking: bool}
  */
 class ReleaseNotesCompiler
 {
     public const string GENERAL_GROUP_TITLE = 'General Improvements';
+
+    public const string VOICE_PAST = 'past';
+
+    public const string VOICE_IMPERATIVE = 'imperative';
+
+    public const string BREAKING_PREFIX = 'Breaking change: ';
+
+    /** @var list<string> base verbs that open a "something new" subject */
+    private const array NEW_VERBS = [
+        'add', 'introduce', 'create', 'implement', 'ship', 'launch', 'enable',
+        'support', 'allow', 'provide', 'expose', 'offer', 'build', 'wire', 'bring',
+        'install', 'new',
+    ];
+
+    /** @var list<string> base verbs that open a fix */
+    private const array FIXED_VERBS = [
+        'fix', 'resolve', 'correct', 'prevent', 'repair', 'stop', 'avoid', 'handle',
+        'guard', 'restore', 'recover', 'patch', 'address', 'unbreak', 'harden',
+        'protect', 'catch', 'tolerate', 'survive',
+    ];
+
+    /** @var list<string> base verbs that open an improvement */
+    private const array IMPROVED_VERBS = [
+        'improve', 'enhance', 'refine', 'standardize', 'standardise', 'update',
+        'polish', 'make', 'move', 'rename', 'restyle', 'align', 'colour', 'color',
+        'show', 'hide', 'drop', 'remove', 'replace', 'pin', 'size', 'resize', 'keep',
+        'mark', 'put', 'send', 'narrow', 'widen', 'claim', 'give', 'apply', 'use',
+        'simplify', 'clean', 'tidy', 'speed', 'reduce', 'increase', 'raise', 'lower',
+        'tweak', 'adjust', 'change', 'switch', 'convert', 'migrate', 'upgrade',
+        'refactor', 'extract', 'split', 'merge', 'unify', 'consolidate', 'streamline',
+        'optimize', 'optimise', 'cache', 'defer', 'prefer', 'default', 'let', 'set',
+        'turn', 'tighten', 'loosen', 'relax', 'expand', 'extend', 'shorten', 'trim',
+        'strip', 'wrap', 'link', 'open', 'close', 'load', 'render', 'display',
+        'surface', 'prune', 'retire', 'deprecate', 'disable', 'skip', 'ignore',
+        'require', 'validate', 'verify', 'check', 'track', 'record', 'log', 'report',
+        'persist', 'store', 'save', 'sync', 'share', 'pass', 'return', 'accept',
+        'reject', 'respect', 'honor', 'honour', 'follow', 'match', 'sort', 'order',
+        'filter', 'group', 'paginate', 'limit', 'cap', 'throttle', 'queue',
+        'schedule', 'run', 'start', 'boot', 'wait', 'retry', 'rebuild', 'regenerate',
+        'refresh', 'reset', 'clear', 'flush', 'warm', 'seed', 'generate', 'compute',
+        'derive', 'bake', 'embed', 'inline', 'bundle', 'compile', 'publish', 'deploy',
+        'release', 'tag', 'name', 'label', 'describe', 'document', 'explain',
+        'clarify', 'announce', 'notify', 'prompt', 'ask', 'confirm', 'warn',
+        'remember', 'forget', 'teach', 'treat', 'count', 'measure', 'scale',
+        'stretch', 'shrink', 'grow', 'fill', 'pad', 'center', 'centre', 'stack',
+        'collapse', 'fold', 'unfold', 'toggle', 'swap', 'flip', 'reverse', 'rotate',
+        'animate', 'fade', 'highlight', 'dim', 'darken', 'lighten', 'brighten',
+        'style', 'theme', 'format', 'indent', 'normalize', 'normalise', 'sanitize',
+        'escape', 'encode', 'decode', 'parse', 'serialize', 'hash', 'sign', 'encrypt',
+        'revoke', 'grant', 'restrict', 'scope', 'isolate', 'separate', 'decouple',
+        'connect', 'disconnect', 'reconnect', 'attach', 'detach', 'mount', 'unmount',
+        'register', 'unregister', 'bind', 'unbind', 'lift', 'hoist', 'promote',
+        'demote', 'flatten', 'nest', 'inherit', 'override', 'bump', 'prefill',
+        'preload', 'prefetch', 'autofocus', 'focus', 'blur', 'scroll', 'snap',
+        'stick', 'float', 'anchor', 'position', 'place', 'lay', 'tune', 'calibrate',
+        'wire', 'route', 'redirect', 'rewrite', 'write', 'read', 'fetch', 'poll',
+        'stream', 'batch', 'chunk', 'debounce', 'memoize', 'memoise', 'reuse',
+        'recycle', 'dedupe', 'deduplicate', 'unblock', 'speedup', 'accelerate',
+        'coalesce', 'reorder', 'reorganize', 'reorganise', 'restructure', 'relocate',
+        'repoint', 'reword', 'rephrase', 'shorten', 'lengthen', 'rebase', 'squash',
+    ];
+
+    /** @var array<string, string> irregular or double-consonant past tenses */
+    private const array PAST_TENSE_EXCEPTIONS = [
+        'make' => 'made', 'keep' => 'kept', 'put' => 'put', 'send' => 'sent',
+        'give' => 'gave', 'show' => 'showed', 'hide' => 'hid', 'build' => 'built',
+        'let' => 'let', 'set' => 'set', 'cut' => 'cut', 'split' => 'split',
+        'bring' => 'brought', 'write' => 'wrote', 'rewrite' => 'rewrote', 'read' => 'read',
+        'run' => 'ran', 'get' => 'got', 'teach' => 'taught', 'catch' => 'caught',
+        'speed' => 'sped', 'feed' => 'fed', 'lead' => 'led', 'hold' => 'held',
+        'bind' => 'bound', 'unbind' => 'unbound', 'find' => 'found', 'shrink' => 'shrank',
+        'grow' => 'grew', 'forget' => 'forgot', 'lay' => 'laid', 'pay' => 'paid',
+        'reset' => 'reset', 'inset' => 'inset', 'offset' => 'offset', 'prefer' => 'preferred',
+        'defer' => 'deferred', 'refer' => 'referred', 'override' => 'overrode',
+        'undo' => 'undid', 'redo' => 'redid', 'do' => 'did', 'go' => 'went', 'become' => 'became',
+        'begin' => 'began', 'stick' => 'stuck', 'sit' => 'sat', 'spin' => 'spun',
+        'strike' => 'struck', 'swing' => 'swung', 'throw' => 'threw', 'tear' => 'tore',
+        'wear' => 'wore', 'win' => 'won', 'sweep' => 'swept', 'sleep' => 'slept',
+        'leave' => 'left', 'lose' => 'lost', 'freeze' => 'froze', 'choose' => 'chose',
+        'stand' => 'stood', 'understand' => 'understood', 'rise' => 'rose', 'fall' => 'fell',
+        'forbid' => 'forbade', 'quit' => 'quit', 'shut' => 'shut', 'hit' => 'hit',
+        'upset' => 'upset', 'broadcast' => 'broadcast', 'cost' => 'cost', 'hurt' => 'hurt',
+        'unbreak' => 'unbroke', 'break' => 'broke', 'speak' => 'spoke', 'take' => 'took',
+        'retake' => 'retook', 'see' => 'saw', 'mean' => 'meant', 'meet' => 'met',
+        'shoot' => 'shot', 'shed' => 'shed', 'spread' => 'spread', 'sell' => 'sold',
+        'tell' => 'told', 'think' => 'thought', 'buy' => 'bought', 'seek' => 'sought',
+        'fight' => 'fought', 'draw' => 'drew', 'redraw' => 'redrew', 'blow' => 'blew',
+        'know' => 'knew', 'fly' => 'flew', 'light' => 'lit', 'ride' => 'rode',
+        'hang' => 'hung', 'stopgap' => 'stopgapped', 'new' => 'added',
+    ];
+
+    private const string FIX_SIGNALS = '/\b(bug|bugs|crash|crashes|crashing|broken|breaks|breaking|regression|regressions|flaky|flap|flapping|leak|leaks|leaking|race|races|false|wrong|wrongly|incorrect|incorrectly|missing|error|errors|fail|fails|failed|failing|failure|failures|typo|typos|stale|no longer|never again|exception|exceptions|deadlock|deadlocks|timeout|timeouts|hang|hangs|hanging|500s?|mismatch|mismatched|invalid|unexpected|undefined|null pointer|off-by-one|duplicate|duplicated|duplicates|lying|misleading|glitch|glitches)\b/i';
 
     /**
      * @param  list<string>  $subjects
@@ -25,16 +124,27 @@ class ReleaseNotesCompiler
     public function compile(array $subjects, array $warnings = []): array
     {
         $sections = ReleaseNote::emptySections();
+        $matchTexts = [];
+        $seen = [];
 
         foreach ($subjects as $subject) {
-            $normalized = $this->normalizeSubject($subject);
+            $parsed = $this->parse($subject);
 
-            if ($normalized === null) {
+            if ($parsed === null) {
                 continue;
             }
 
-            $section = $this->classifySubject($normalized);
-            $sections[$section][] = $this->rewriteSubject($normalized, $section);
+            $section = $this->classify($parsed);
+            $sentence = $this->render($parsed, $section);
+            $key = $this->itemKey($sentence);
+
+            if (isset($seen[$key])) {
+                continue;
+            }
+
+            $seen[$key] = true;
+            $sections[$section][] = $sentence;
+            $matchTexts[$sentence] = $parsed['raw'];
         }
 
         $itemCount = count(Arr::flatten($sections));
@@ -48,7 +158,7 @@ class ReleaseNotesCompiler
             'summary' => $this->buildSummary($sections),
             'sections' => $sections,
             'summary_sections' => $this->summarySections($sections),
-            'feature_groups' => $this->featureGroups($sections),
+            'feature_groups' => $this->featureGroups($sections, $matchTexts),
             'item_count' => $itemCount,
             'generation_mode' => ReleaseNote::GENERATION_MODE_PARSED,
             'generation_warnings' => array_values($warnings),
@@ -110,10 +220,14 @@ class ReleaseNotesCompiler
     }
 
     /**
+     * Group items by the first configured feature area whose pattern matches
+     * either the rewritten sentence or the raw subject it came from.
+     *
      * @param  Sections  $sections
+     * @param  array<string, string>  $matchTexts  sentence => raw subject
      * @return list<FeatureGroup>
      */
-    public function featureGroups(array $sections): array
+    public function featureGroups(array $sections, array $matchTexts = []): array
     {
         $groups = [];
 
@@ -139,7 +253,8 @@ class ReleaseNotesCompiler
 
         foreach (ReleaseNote::SECTIONS as $section) {
             foreach ($sections[$section] ?? [] as $item) {
-                $title = $this->featureGroupTitleForItem($item, $groups) ?? self::GENERAL_GROUP_TITLE;
+                $candidates = array_unique([$item, $matchTexts[$item] ?? $item]);
+                $title = $this->featureGroupTitleFor($candidates, $groups) ?? self::GENERAL_GROUP_TITLE;
                 $groups[$title]['sections'][$section][] = $item;
             }
         }
@@ -157,14 +272,53 @@ class ReleaseNotesCompiler
     }
 
     /**
+     * Past tense of an imperative verb: exceptions first, then the regular
+     * rules (e -> ed, consonant-y -> ied, single-syllable CVC doubles).
+     */
+    public static function pastTense(string $verb): string
+    {
+        $verb = strtolower($verb);
+
+        if (isset(self::PAST_TENSE_EXCEPTIONS[$verb])) {
+            return self::PAST_TENSE_EXCEPTIONS[$verb];
+        }
+
+        if (str_ends_with($verb, 'ed') || str_ends_with($verb, 'e')) {
+            return str_ends_with($verb, 'ed') ? $verb : $verb.'d';
+        }
+
+        if (preg_match('/[^aeiou]y$/', $verb)) {
+            return substr($verb, 0, -1).'ied';
+        }
+
+        // Single-syllable consonant-vowel-consonant verbs double the final
+        // consonant (stop -> stopped, pin -> pinned) but not after a vowel
+        // pair (wait -> waited) or a final w/x/y (narrow -> narrowed).
+        $singleSyllable = preg_match_all('/[aeiouy]+/', $verb) === 1;
+
+        if ($singleSyllable && preg_match('/[^aeiou][aeiou][^aeiouwxy]$/', $verb)) {
+            return $verb.substr($verb, -1).'ed';
+        }
+
+        return $verb.'ed';
+    }
+
+    /**
+     * @param  list<string>  $candidates
      * @param  array<string, array{title: string, summary: string, patterns: mixed, sections: Sections}>  $groups
      */
-    protected function featureGroupTitleForItem(string $item, array $groups): ?string
+    protected function featureGroupTitleFor(array $candidates, array $groups): ?string
     {
         foreach ($groups as $group) {
             foreach ((array) ($group['patterns'] ?? []) as $pattern) {
-                if (is_string($pattern) && preg_match($pattern, $item)) {
-                    return $group['title'];
+                if (! is_string($pattern)) {
+                    continue;
+                }
+
+                foreach ($candidates as $candidate) {
+                    if (preg_match($pattern, $candidate)) {
+                        return $group['title'];
+                    }
                 }
             }
         }
@@ -172,69 +326,126 @@ class ReleaseNotesCompiler
         return null;
     }
 
-    protected function normalizeSubject(string $subject): ?string
+    /**
+     * @return Parsed|null
+     */
+    protected function parse(string $subject): ?array
     {
-        $subject = trim($subject);
+        $raw = trim($subject);
 
-        if ($subject === '') {
+        if ($raw === '') {
             return null;
         }
 
         foreach ((array) $this->config('ignore_patterns', []) as $pattern) {
-            if (is_string($pattern) && preg_match($pattern, $subject)) {
+            if (is_string($pattern) && preg_match($pattern, $raw)) {
                 return null;
             }
         }
 
-        $subject = preg_replace('/^(feat|fix|chore|docs|refactor|test|perf|style)(\([^)]+\))?:\s*/i', '', $subject) ?? $subject;
-        $subject = preg_replace('/^\[[^\]]+\]\s*/', '', $subject) ?? $subject;
-        $subject = trim($subject, " \t\n\r\0\x0B-");
+        $type = null;
+        $scope = null;
+        $breaking = false;
+        $text = $raw;
 
-        return $subject !== '' ? $subject : null;
-    }
-
-    protected function classifySubject(string $subject): string
-    {
-        $subject = Str::lower($subject);
-
-        foreach ((array) $this->config('section_prefixes', []) as $section => $prefixes) {
-            if (! in_array($section, ReleaseNote::SECTIONS, true)) {
-                continue;
-            }
-
-            foreach ((array) $prefixes as $prefix) {
-                if ($subject === $prefix || Str::startsWith($subject, $prefix.' ')) {
-                    return $section;
-                }
-            }
+        if (preg_match('/^(?<type>[a-z]+)(?:\((?<scope>[^)]+)\))?(?<bang>!)?:\s*(?<rest>.+)$/i', $text, $match)) {
+            $type = strtolower($match['type']);
+            $scope = $match['scope'] !== '' ? $match['scope'] : null;
+            $breaking = $match['bang'] === '!';
+            $text = $match['rest'];
         }
 
-        if (Str::contains($subject, [' fix ', ' fixed ', ' resolve', ' resolved', ' prevent', ' prevented'])) {
+        if (preg_match('/\bBREAKING[ -]CHANGE\b/i', $text)) {
+            $breaking = true;
+            $text = (string) preg_replace('/\bBREAKING[ -]CHANGE\b:?\s*/i', '', $text);
+        }
+
+        $text = (string) preg_replace('/^\[[^\]]+\]\s*/', '', $text);
+        $text = (string) preg_replace('/^[A-Z]{2,}-\d+:?\s*/', '', $text);
+        $text = (string) preg_replace('/^:[a-z_]+:\s*/', '', $text);
+        $text = (string) preg_replace('/^[\x{1F000}-\x{1FAFF}\x{2600}-\x{27BF}]+\s*/u', '', $text);
+        $text = (string) preg_replace('/\s*\(#\d+\)\s*$/', '', $text);
+        $text = (string) preg_replace('/\s+#\d+\s*$/', '', $text);
+        $text = (string) preg_replace('/\s*\((?:closes|fixes|resolves|refs?)\s+#\d+\)\s*$/i', '', $text);
+        $text = str_replace('`', '', $text);
+        $text = (string) preg_replace('/\s+/', ' ', $text);
+        $text = trim($text, " \t\n\r\0\x0B-:.");
+
+        if ($text === '') {
+            return null;
+        }
+
+        return [
+            'text' => $text,
+            'raw' => $raw,
+            'type' => $type,
+            'scope' => $scope,
+            'breaking' => $breaking,
+        ];
+    }
+
+    /**
+     * @param  Parsed  $parsed
+     */
+    protected function classify(array $parsed): string
+    {
+        $byType = match ($parsed['type']) {
+            'feat', 'feature' => ReleaseNote::SECTION_NEW,
+            'fix', 'bugfix', 'hotfix', 'revert' => ReleaseNote::SECTION_FIXED,
+            'perf', 'refactor', 'style', 'improvement', 'improve', 'ui', 'ux' => ReleaseNote::SECTION_IMPROVED,
+            default => null,
+        };
+
+        if ($byType !== null) {
+            return $byType;
+        }
+
+        $leading = $this->leadingVerb($parsed['text']);
+
+        if ($leading !== null && in_array($leading, $this->verbs(ReleaseNote::SECTION_NEW), true)) {
+            return ReleaseNote::SECTION_NEW;
+        }
+
+        if ($leading !== null && in_array($leading, $this->verbs(ReleaseNote::SECTION_FIXED), true)) {
             return ReleaseNote::SECTION_FIXED;
+        }
+
+        if (preg_match(self::FIX_SIGNALS, $parsed['text'])) {
+            return ReleaseNote::SECTION_FIXED;
+        }
+
+        if ($leading === null && preg_match('/\b(new|initial|first)\b/i', $parsed['text'])) {
+            return ReleaseNote::SECTION_NEW;
         }
 
         return ReleaseNote::SECTION_IMPROVED;
     }
 
-    protected function rewriteSubject(string $subject, string $section): string
+    /**
+     * @param  Parsed  $parsed
+     */
+    protected function render(array $parsed, string $section): string
     {
+        $text = $parsed['text'];
+
         foreach ((array) $this->config('cleanup_replacements', []) as $pattern => $replacement) {
-            $subject = preg_replace($pattern, (string) $replacement, $subject) ?? $subject;
+            $text = preg_replace($pattern, (string) $replacement, $text) ?? $text;
         }
 
-        $subject = preg_replace('/\s+/', ' ', trim($subject)) ?? $subject;
-        $subject = $this->expandDetailedRewrite($subject) ?? $this->rewriteSubjectWithFallback($subject, $section);
-        $subject = Str::ucfirst(trim($subject));
+        $text = (string) preg_replace('/\s+/', ' ', trim($text));
+        $text = $this->detailRewrite($text) ?? $this->voice($text);
+        $text = Str::ucfirst(trim($text));
+        $text = rtrim($text, '.').'.';
 
-        return rtrim($subject, '.').'.';
+        return $parsed['breaking'] ? self::BREAKING_PREFIX.$text : $text;
     }
 
-    protected function expandDetailedRewrite(string $subject): ?string
+    protected function detailRewrite(string $text): ?string
     {
-        $withoutPrefix = $this->stripLeadingActionPrefix($subject);
+        $withoutVerb = $this->stripLeadingVerb($text);
 
         foreach ((array) $this->config('detail_rewrites', []) as $pattern => $replacement) {
-            if (preg_match($pattern, $subject) || preg_match($pattern, $withoutPrefix)) {
+            if (preg_match($pattern, $text) || preg_match($pattern, $withoutVerb)) {
                 return (string) $replacement;
             }
         }
@@ -242,76 +453,92 @@ class ReleaseNotesCompiler
         return null;
     }
 
-    protected function stripLeadingActionPrefix(string $subject): string
+    /**
+     * Past voice turns the leading imperative verb, and any known verb that
+     * follows "and" / ", ", into past tense ("Pin X and link Y" becomes
+     * "Pinned X and linked Y"). Imperative voice keeps the subject as written.
+     */
+    protected function voice(string $text): string
     {
-        return trim((string) preg_replace(
-            '/^(add|added|introduce|introduced|create|created|new|improve|improved|enhance|enhanced|refine|refined|standardize|standardized|update|updated|polish|polished|make|made|fix|fixed|resolve|resolved|correct|corrected|prevent|prevented|repair|repaired)\b\s*/i',
-            '',
-            $subject,
-            1,
-        ));
+        if ($this->config('voice', self::VOICE_PAST) !== self::VOICE_PAST) {
+            return $text;
+        }
+
+        $known = $this->allVerbs();
+        $words = explode(' ', $text);
+        $first = strtolower(rtrim($words[0], ',;:'));
+
+        if (! in_array($first, $known, true)) {
+            return $text;
+        }
+
+        $words[0] = self::pastTense($first);
+
+        foreach ($words as $index => $word) {
+            if ($index === 0) {
+                continue;
+            }
+
+            $previous = strtolower(rtrim($words[$index - 1], ','));
+            $conjunction = $previous === 'and' || $previous === 'then' || str_ends_with($words[$index - 1], ',');
+            $candidate = strtolower(rtrim($word, ',;:'));
+
+            if ($conjunction && in_array($candidate, $known, true) && $candidate !== 'new') {
+                $words[$index] = self::pastTense($candidate).substr($word, strlen($candidate));
+            }
+        }
+
+        return implode(' ', $words);
     }
 
-    protected function rewriteSubjectWithFallback(string $subject, string $section): string
+    protected function leadingVerb(string $text): ?string
     {
-        $rewritten = match ($section) {
-            ReleaseNote::SECTION_NEW => $this->rewriteNewSubject($subject),
-            ReleaseNote::SECTION_FIXED => $this->rewriteFixedSubject($subject),
-            default => $this->rewriteImprovedSubject($subject),
+        $first = strtolower((string) preg_replace('/[^a-z].*$/i', '', explode(' ', $text)[0]));
+
+        return in_array($first, $this->allVerbs(), true) ? $first : null;
+    }
+
+    protected function stripLeadingVerb(string $text): string
+    {
+        $words = explode(' ', $text, 2);
+
+        if ($this->leadingVerb($text) === null || ! isset($words[1])) {
+            return $text;
+        }
+
+        return trim($words[1]);
+    }
+
+    /** @return list<string> */
+    protected function verbs(string $section): array
+    {
+        $builtIn = match ($section) {
+            ReleaseNote::SECTION_NEW => self::NEW_VERBS,
+            ReleaseNote::SECTION_FIXED => self::FIXED_VERBS,
+            default => self::IMPROVED_VERBS,
         };
 
-        if ($rewritten !== null) {
-            return $rewritten;
-        }
+        $configured = array_map(
+            static fn ($verb): string => strtolower((string) $verb),
+            (array) ($this->config('section_prefixes', [])[$section] ?? []),
+        );
 
-        return match ($section) {
-            ReleaseNote::SECTION_NEW => 'Added '.lcfirst($subject),
-            ReleaseNote::SECTION_FIXED => 'Fixed '.lcfirst($subject),
-            default => 'Improved '.lcfirst($subject),
-        };
+        return array_values(array_unique([...$builtIn, ...$configured]));
     }
 
-    protected function rewriteNewSubject(string $subject): ?string
+    /** @return list<string> */
+    protected function allVerbs(): array
     {
-        if (preg_match('/^(add|added|introduce|introduced|create|created|new)\s+(.+)$/i', trim($subject), $matches)) {
-            return 'Added '.$matches[2];
-        }
-
-        return null;
+        return array_values(array_unique([
+            ...$this->verbs(ReleaseNote::SECTION_NEW),
+            ...$this->verbs(ReleaseNote::SECTION_FIXED),
+            ...$this->verbs(ReleaseNote::SECTION_IMPROVED),
+        ]));
     }
 
-    protected function rewriteImprovedSubject(string $subject): ?string
+    protected function itemKey(string $sentence): string
     {
-        $trimmed = trim($subject);
-
-        if (preg_match('/^(make|made)\s+(.+?)\s+clickable$/i', $trimmed, $matches)) {
-            return $matches[2].' are now clickable';
-        }
-
-        if (preg_match('/^(standardize|standardized)\s+(.+)$/i', $trimmed, $matches)) {
-            return $matches[2].' are now more consistent';
-        }
-
-        if (preg_match('/^(improve|improved|enhance|enhanced|refine|refined|update|updated|polish|polished)\s+(.+)$/i', $trimmed, $matches)) {
-            return $matches[2].' have been improved';
-        }
-
-        return null;
-    }
-
-    protected function rewriteFixedSubject(string $subject): ?string
-    {
-        $trimmed = trim($subject);
-
-        if (preg_match('/^(fix|fixed|resolve|resolved|correct|corrected|repair|repaired)\s+(.+)$/i', $trimmed, $matches)) {
-            return $matches[2].' now works correctly';
-        }
-
-        if (preg_match('/^(prevent|prevented)\s+(.+)$/i', $trimmed, $matches)) {
-            return $matches[2].' is now prevented';
-        }
-
-        return null;
+        return (string) preg_replace('/[^a-z0-9]+/', '', strtolower($sentence));
     }
 
     /**

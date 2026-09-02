@@ -108,26 +108,27 @@ return [
             '/\bschema dump\b/i',
             '/\bfor reference\b/i',
             '/^\s*ignore(?:s|d)?\b/i',
+            '/^\s*wip\b/i',
+            '/^\s*bump\b/i',
+            '/^\s*revert\s+"?revert\b/i',
         ],
 
         // Ordered list of {title, summary, patterns[]}; the first match wins
         // and anything unmatched lands in "General Improvements".
         'feature_groups' => [],
 
+        // Extra imperative verbs (base form) per section, added on top of the
+        // compiler's built-in lexicon. Subjects are classified by conventional
+        // type first, then the leading verb, then fix-signal keywords.
         'section_prefixes' => [
-            ReleaseNote::SECTION_NEW => [
-                'add', 'added', 'introduce', 'introduced', 'create', 'created', 'new',
-            ],
-            ReleaseNote::SECTION_IMPROVED => [
-                'improve', 'improved', 'enhance', 'enhanced', 'refine', 'refined',
-                'standardize', 'standardized', 'update', 'updated', 'polish', 'polished',
-                'make', 'made',
-            ],
-            ReleaseNote::SECTION_FIXED => [
-                'fix', 'fixed', 'resolve', 'resolved', 'correct', 'corrected',
-                'prevent', 'prevented', 'repair', 'repaired',
-            ],
+            ReleaseNote::SECTION_NEW => [],
+            ReleaseNote::SECTION_IMPROVED => [],
+            ReleaseNote::SECTION_FIXED => [],
         ],
+
+        // "past" turns leading verbs into past tense ("Added…", "Fixed…",
+        // "Pinned X and linked Y"); "imperative" keeps subjects as written.
+        'voice' => 'past',
 
         // Regex => replacement applied to every subject before rewriting.
         'cleanup_replacements' => [

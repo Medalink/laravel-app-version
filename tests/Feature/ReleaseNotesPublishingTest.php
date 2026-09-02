@@ -79,7 +79,7 @@ it('merges parsed commits under configured custom release notes', function (): v
         ->and($release?->headline)->toBe('Packet capture is now built in')
         ->and($release?->sections[ReleaseNote::SECTION_FIXED])->toBe([
             'Improved capture performance.',
-            'Capture upload retry state now works correctly.',
+            'Fixed capture upload retry state.',
         ])
         ->and($release?->item_count)->toBe(3);
 });
