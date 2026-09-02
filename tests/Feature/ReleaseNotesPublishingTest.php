@@ -162,6 +162,26 @@ it('falls back to a tag or stored commit when git has no VERSION boundary for th
         ->and(ReleaseNote::forVersion('2.0.3')?->source_range)->toBe('stored-202..HEAD');
 });
 
+it('gives the oldest version no previous boundary even when newer releases are stored', function (): void {
+    $this->writeVersionJson('0.1.0');
+    ReleaseNote::factory()->create(['version' => '0.1.0', 'source_commit' => 'head-commit']);
+    $this->source->history = [
+        ['version' => '0.1.0', 'commit' => 'head-commit'],
+        ['version' => '0.0.1', 'commit' => 'first-tag'],
+    ];
+    $this->source->subjects['recent:first-tag'] = ['Add the foundation', 'Add the first pages'];
+
+    $this->artisan('app:release-notes:backfill', ['--from' => '0.0.1', '--to' => '0.0.1', '--force' => true])
+        ->assertSuccessful();
+
+    $release = ReleaseNote::forVersion('0.0.1');
+
+    expect($release?->previous_version)->toBeNull()
+        ->and($release?->source_range)->toBe('first-tag')
+        ->and($release?->generation_mode)->toBe(ReleaseNote::GENERATION_MODE_PARSED)
+        ->and($release?->item_count)->toBe(2);
+});
+
 it('does not block deployment on commit lookup failures unless strict', function (): void {
     $this->writeVersionJson('2.0.4');
     $this->source->history = [['version' => '2.0.4', 'commit' => 'ddd444']];

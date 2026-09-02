@@ -8,6 +8,7 @@ use Illuminate\Support\Facades\Log;
 use Medalink\AppVersion\AppVersion;
 use Medalink\AppVersion\Contracts\ReleaseCommitSource;
 use Medalink\AppVersion\Models\ReleaseNote;
+use Medalink\AppVersion\Support\SemanticVersion;
 use Throwable;
 
 /**
@@ -274,8 +275,10 @@ class ReleaseNotesPublisher
             }
         }
 
+        // Only an older stored release can be the boundary; the oldest
+        // version in history has no previous at all.
         $stored = AppVersion::releaseNoteModel()::published()
-            ->first(static fn (ReleaseNote $release): bool => $release->version !== $version);
+            ->first(static fn (ReleaseNote $release): bool => SemanticVersion::compare($release->version, $version) < 0);
 
         if ($stored === null) {
             return null;
