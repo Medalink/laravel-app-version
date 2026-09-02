@@ -1,0 +1,57 @@
+{
+    "name": "medalink/laravel-app-version",
+    "description": "Git-derived application versions (VERSION file + semver tags + build counts + diff stats) and commit-driven release notes with per-user read state for Laravel.",
+    "type": "library",
+    "license": "MIT",
+    "keywords": ["laravel", "version", "release-notes", "git", "changelog"],
+    "authors": [
+        {
+            "name": "Eric Percifield",
+            "email": "medalink7@gmail.com"
+        }
+    ],
+    "require": {
+        "php": "^8.4",
+        "illuminate/console": "^12.0|^13.0",
+        "illuminate/contracts": "^12.0|^13.0",
+        "illuminate/database": "^12.0|^13.0",
+        "illuminate/process": "^12.0|^13.0",
+        "illuminate/support": "^12.0|^13.0"
+    },
+    "require-dev": {
+        "laravel/pint": "^1.0",
+        "orchestra/testbench": "^11.0",
+        "pestphp/pest": "^5.0",
+        "pestphp/pest-plugin-laravel": "^5.0"
+    },
+    "autoload": {
+        "psr-4": {
+            "Medalink\\AppVersion\\": "src/",
+            "Medalink\\AppVersion\\Database\\Factories\\": "database/factories/"
+        }
+    },
+    "autoload-dev": {
+        "psr-4": {
+            "Medalink\\AppVersion\\Tests\\": "tests/"
+        }
+    },
+    "extra": {
+        "laravel": {
+            "providers": [
+                "Medalink\\AppVersion\\AppVersionServiceProvider"
+            ]
+        }
+    },
+    "scripts": {
+        "test": "vendor/bin/pest",
+        "lint": "vendor/bin/pint"
+    },
+    "config": {
+        "sort-packages": true,
+        "allow-plugins": {
+            "pestphp/pest-plugin": true
+        }
+    },
+    "minimum-stability": "stable",
+    "prefer-stable": true
+}
