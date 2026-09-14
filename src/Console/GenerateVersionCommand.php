@@ -299,6 +299,6 @@ class GenerateVersionCommand extends Command
 
         return $changed === substr($relative, strlen($root))
             && is_array($snapshot)
-            && ($snapshot['source_commit'] ?? null) === $this->runTrimmed('git rev-parse HEAD^');
+            && ($snapshot['source_commit'] ?? null) === $this->runTrimmed('git rev-parse HEAD~1');
     }
 }

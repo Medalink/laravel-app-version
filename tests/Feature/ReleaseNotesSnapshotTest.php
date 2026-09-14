@@ -134,7 +134,7 @@ it('keeps the committed flat file stable after an artifact-only commit', functio
     $first = File::get(AppVersion::flatPath());
     Process::fake([
         'git diff-tree --no-commit-id --name-only -r HEAD' => Process::result(output: 'version-info.json'),
-        'git rev-parse HEAD^' => Process::result(output: 'head-commit'),
+        'git rev-parse HEAD~1' => Process::result(output: 'head-commit'),
     ]);
     Process::preventStrayProcesses();
     $this->artisan('app:version', ['--flat' => true])->assertSuccessful();
