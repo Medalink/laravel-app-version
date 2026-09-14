@@ -49,6 +49,36 @@ php artisan app:version --no-interaction
 php artisan app:release-notes:publish --no-interaction
 ```
 
+### Deploying without Git or database access during the build
+
+Create both artifacts while the build checkout still has complete Git history:
+
+```bash
+php artisan app:version --strict --no-interaction
+php artisan app:release-notes:backfill --all --output=storage/app/release-notes.json --no-interaction
+```
+
+The export uses the same compiler and configuration as live publishing, including
+custom release copy. It does not query or write the database. Ship both
+`storage/app/version.json` and `storage/app/release-notes.json` in the build image.
+After migrations, publish the snapshot into the configured release-note model:
+
+```bash
+php artisan app:release-notes:publish --from-file=storage/app/release-notes.json --no-interaction
+```
+
+Import does not access Git, rejects snapshots for another build, and upserts all
+releases in one transaction. Repeated imports preserve original publication dates
+and user read markers. Missing or malformed files fail the command. Use the
+existing backfill `--from`, `--to`, or `--latest` options instead of `--all` to
+export a narrower range. `--output` and `--force` cannot be combined.
+
+`app:version --strict` fails on unreadable metadata or diff statistics instead of
+silently writing zero counts. Partial clones must have their historical file
+objects available before generation; commit metadata alone cannot provide line
+counts. Build artifacts must be generated during build, not in an ephemeral
+deployment-command filesystem.
+
 ## Version resolution
 
 | Situation | Version | Build |

@@ -139,3 +139,16 @@ it('refreshes the in-process reader after writing', function (): void {
 
     expect(AppVersion::version())->toBe('1.5.0');
 });
+
+it('refuses to overwrite version metadata with zero stats when strict Git collection fails', function (): void {
+    $this->writeVersionFile('1.5.0');
+    $this->writeVersionJson('1.4.0');
+    Process::fake([
+        'git log --format= --numstat *' => Process::result(errorOutput: 'missing Git objects', exitCode: 128),
+        '*' => Process::result(output: ''),
+    ]);
+
+    expect(fn () => $this->artisan('app:version', ['--strict' => true])->run())
+        ->toThrow(RuntimeException::class, 'Unable to collect version statistics');
+    expect(generatedJson()['version'])->toBe('1.4.0');
+});

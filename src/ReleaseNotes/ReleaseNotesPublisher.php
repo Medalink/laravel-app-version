@@ -38,13 +38,13 @@ class ReleaseNotesPublisher
     /**
      * @return array<string, mixed>
      */
-    public function payloadForVersion(string $version, bool $strict = false, ?string $fromVersionOverride = null): array
+    public function payloadForVersion(string $version, bool $strict = false, ?string $fromVersionOverride = null, bool $useStoredReleases = true): array
     {
         $history = $this->safeVersionHistory($strict);
         $currentRef = $this->findVersionRef($history, $version);
         $previousRef = $fromVersionOverride !== null
             ? $this->findVersionRef($history, $fromVersionOverride)
-            : $this->findPreviousVersionRef($history, $version);
+            : $this->findPreviousVersionRef($history, $version, $useStoredReleases);
         $previousVersion = $fromVersionOverride ?: ($previousRef['version'] ?? null);
         $warnings = [];
 
@@ -61,7 +61,7 @@ class ReleaseNotesPublisher
             ? ($this->commitSource->currentCommit() ?? ($currentRef['commit'] ?? null))
             : ($currentRef['commit'] ?? null);
 
-        $fromRef = $previousVersion !== null ? $this->resolveFromRef($previousRef, $previousVersion) : null;
+        $fromRef = $previousVersion !== null ? $this->resolveFromRef($previousRef, $previousVersion, $useStoredReleases) : null;
 
         if ($previousVersion !== null && $fromRef === null) {
             $warnings[] = "No commit boundary found for {$previousVersion}; using a limited recent history fallback.";
@@ -110,7 +110,7 @@ class ReleaseNotesPublisher
     /**
      * @param  array{version: string, commit: string}|null  $previousRef
      */
-    protected function resolveFromRef(?array $previousRef, string $previousVersion): ?string
+    protected function resolveFromRef(?array $previousRef, string $previousVersion, bool $useStoredReleases = true): ?string
     {
         $fromRef = $previousRef['commit'] ?? null;
 
@@ -122,6 +122,10 @@ class ReleaseNotesPublisher
 
         if (is_string($fromRef) && $fromRef !== '') {
             return $fromRef;
+        }
+
+        if (! $useStoredReleases) {
+            return null;
         }
 
         $stored = AppVersion::releaseNoteModel()::forVersion($previousVersion)?->source_commit;
@@ -282,12 +286,16 @@ class ReleaseNotesPublisher
      * @param  list<array{version: string, commit: string}>  $history
      * @return array{version: string, commit: string}|null
      */
-    protected function findPreviousVersionRef(array $history, string $version): ?array
+    protected function findPreviousVersionRef(array $history, string $version, bool $useStoredReleases = true): ?array
     {
         foreach ($history as $index => $entry) {
             if ($entry['version'] === $version && isset($history[$index + 1])) {
                 return $history[$index + 1];
             }
+        }
+
+        if (! $useStoredReleases) {
+            return null;
         }
 
         // Only an older stored release can be the boundary; the oldest

@@ -7,10 +7,11 @@ use Illuminate\Support\Facades\File;
 use Illuminate\Support\Facades\Process;
 use Medalink\AppVersion\AppVersion;
 use Medalink\AppVersion\Support\SemanticVersion;
+use RuntimeException;
 
 class GenerateVersionCommand extends Command
 {
-    protected $signature = 'app:version';
+    protected $signature = 'app:version {--strict : Fail when Git metadata or diff statistics cannot be read}';
 
     protected $description = 'Generate version.json from the VERSION file, semver git tags, and commit statistics';
 
@@ -187,6 +188,10 @@ class GenerateVersionCommand extends Command
         $result = Process::path(AppVersion::repositoryPath())->timeout(120)->run($command);
 
         if (! $result->successful()) {
+            if ($this->option('strict')) {
+                throw new RuntimeException("Unable to collect version statistics: {$command}");
+            }
+
             return [0, 0];
         }
 
@@ -228,6 +233,10 @@ class GenerateVersionCommand extends Command
         $result = Process::path(AppVersion::repositoryPath())->run($command);
 
         if (! $result->successful()) {
+            if ($this->option('strict') && ! str_starts_with($command, 'git describe ')) {
+                throw new RuntimeException("Unable to read version metadata: {$command}");
+            }
+
             return null;
         }
 
