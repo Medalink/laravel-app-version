@@ -45,6 +45,8 @@ abstract class TestCase extends Orchestra
         $app['config']->set('app-version.repository_path', $this->workspace);
         $app['config']->set('app-version.version_file', $this->workspace.DIRECTORY_SEPARATOR.'VERSION');
         $app['config']->set('app-version.json_path', $this->workspace.DIRECTORY_SEPARATOR.'storage'.DIRECTORY_SEPARATOR.'version.json');
+        $app['config']->set('app-version.flat', false);
+        $app['config']->set('app-version.flat_path', $this->workspace.DIRECTORY_SEPARATOR.'version-info.json');
     }
 
     protected function defineDatabaseMigrations(): void

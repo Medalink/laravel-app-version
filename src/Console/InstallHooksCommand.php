@@ -22,6 +22,7 @@ class InstallHooksCommand extends Command
     private const string SHEBANG = '#!/usr/bin/env sh';
 
     protected $signature = 'app:version:install-hooks
+        {--flat : Refresh the committed version-info.json snapshot after source changes}
         {--uninstall : Remove the managed block from every hook}';
 
     protected $description = 'Install git hooks that regenerate version.json after commits, merges, checkouts, and rebases';
@@ -58,7 +59,7 @@ class InstallHooksCommand extends Command
      * agent shell), which often lacks php. Prefer php from PATH but fall back
      * to the interpreter that ran the installer, baked in as an absolute path.
      */
-    public static function managedBlock(?string $phpBinary = null): string
+    public static function managedBlock(?string $phpBinary = null, bool $flat = false): string
     {
         $fallback = str_replace('\\', '/', $phpBinary ?? PHP_BINARY);
 
@@ -66,7 +67,8 @@ class InstallHooksCommand extends Command
             self::BEGIN_MARKER,
             'if [ -f artisan ]; then',
             '    APP_VERSION_PHP="$(command -v php 2>/dev/null || printf \'%s\' \''.$fallback.'\')"',
-            '    "$APP_VERSION_PHP" artisan app:version --no-interaction --quiet >/dev/null 2>&1 || true',
+            '    "$APP_VERSION_PHP" artisan app:version'.($flat ? ' --flat' : '').' --no-interaction --quiet >/dev/null 2>&1'
+                .($flat ? ' || printf "%s\n" "Version snapshot refresh failed; run php artisan app:version --flat before release." >&2' : ' || true'),
             'fi',
             self::END_MARKER,
         ]);
@@ -74,8 +76,10 @@ class InstallHooksCommand extends Command
 
     protected function install(string $path): string
     {
+        $block = self::managedBlock(flat: $this->option('flat') || config('app-version.flat', false));
+
         if (! File::exists($path)) {
-            File::put($path, self::SHEBANG."\n\n".self::managedBlock()."\n");
+            File::put($path, self::SHEBANG."\n\n".$block."\n");
             $this->makeExecutable($path);
 
             return 'created';
@@ -84,13 +88,13 @@ class InstallHooksCommand extends Command
         $contents = (string) File::get($path);
 
         if ($this->hasManagedBlock($contents)) {
-            File::put($path, $this->replaceManagedBlock($contents, self::managedBlock()));
+            File::put($path, $this->replaceManagedBlock($contents, $block));
             $this->makeExecutable($path);
 
             return 'updated';
         }
 
-        File::put($path, rtrim($contents)."\n\n".self::managedBlock()."\n");
+        File::put($path, rtrim($contents)."\n\n".$block."\n");
         $this->makeExecutable($path);
 
         return 'appended';

@@ -6,17 +6,28 @@ use Illuminate\Console\Command;
 use Illuminate\Support\Facades\File;
 use Illuminate\Support\Facades\Process;
 use Medalink\AppVersion\AppVersion;
+use Medalink\AppVersion\ReleaseNotes\ReleaseNotesPublisher;
 use Medalink\AppVersion\Support\SemanticVersion;
 use RuntimeException;
 
 class GenerateVersionCommand extends Command
 {
-    protected $signature = 'app:version {--strict : Fail when Git metadata or diff statistics cannot be read}';
+    protected $signature = 'app:version
+        {--flat : Write version-info.json with statistics and full release history for committing}
+        {--strict : Fail when Git metadata or diff statistics cannot be read}';
 
     protected $description = 'Generate version.json from the VERSION file, semver git tags, and commit statistics';
 
     public function handle(): int
     {
+        $flat = $this->option('flat') || config('app-version.flat', false);
+
+        if ($flat && $this->snapshotOnlyCommit()) {
+            $this->info('The last commit only records the existing release snapshot; keeping its source metadata.');
+
+            return self::SUCCESS;
+        }
+
         $versionFile = AppVersion::versionFile();
 
         if (! File::exists($versionFile)) {
@@ -51,15 +62,39 @@ class GenerateVersionCommand extends Command
             'stats' => $this->gatherStats($release['stats_range']),
         ];
 
-        $outputPath = AppVersion::jsonPath();
+        if ($flat) {
+            $data['source_commit'] = $this->runTrimmed('git rev-parse HEAD');
+            $data['release_notes'] = AppVersion::usingData($data, function () use ($full, $version, $data): array {
+                $publisher = app(ReleaseNotesPublisher::class);
+                $releases = [];
+
+                foreach (array_reverse($publisher->versionHistory()) as $entry) {
+                    $payload = $publisher->payloadForVersion($entry['version'], strict: true, useStoredReleases: false);
+
+                    if ($entry['version'] === $version && $data['committed_at'] !== null) {
+                        $payload['published_at'] = $data['committed_at'];
+                    }
+
+                    $releases[] = $payload;
+                }
+
+                if ($releases === []) {
+                    throw new RuntimeException('No release history could be exported.');
+                }
+
+                return ['format' => 1, 'build' => $full, 'releases' => $releases];
+            });
+        }
+
+        $outputPath = $flat ? AppVersion::flatPath() : AppVersion::jsonPath();
         File::ensureDirectoryExists(dirname($outputPath));
-        File::put($outputPath, json_encode($data, JSON_PRETTY_PRINT | JSON_UNESCAPED_SLASHES)."\n");
+        File::replace($outputPath, json_encode($data, JSON_PRETTY_PRINT | JSON_UNESCAPED_SLASHES | JSON_THROW_ON_ERROR)."\n");
         AppVersion::clearCache();
 
         $this->info("Version: {$full}");
         $this->table(
             ['Field', 'Value'],
-            collect($data)->except('stats')->map(static fn ($value, $key): array => [$key, (string) ($value ?? '-')])->values()->all(),
+            collect($data)->except(['stats', 'release_notes'])->map(static fn ($value, $key): array => [$key, (string) ($value ?? '-')])->values()->all(),
         );
 
         $stats = $data['stats'];
@@ -188,7 +223,7 @@ class GenerateVersionCommand extends Command
         $result = Process::path(AppVersion::repositoryPath())->timeout(120)->run($command);
 
         if (! $result->successful()) {
-            if ($this->option('strict')) {
+            if ($this->option('strict') || $this->option('flat') || config('app-version.flat', false)) {
                 throw new RuntimeException("Unable to collect version statistics: {$command}");
             }
 
@@ -233,7 +268,7 @@ class GenerateVersionCommand extends Command
         $result = Process::path(AppVersion::repositoryPath())->run($command);
 
         if (! $result->successful()) {
-            if ($this->option('strict') && ! str_starts_with($command, 'git describe ')) {
+            if (($this->option('strict') || $this->option('flat') || config('app-version.flat', false)) && ! str_starts_with($command, 'git describe ')) {
                 throw new RuntimeException("Unable to read version metadata: {$command}");
             }
 
@@ -243,5 +278,27 @@ class GenerateVersionCommand extends Command
         $value = trim($result->output());
 
         return $value !== '' ? $value : null;
+    }
+
+    /** Avoid a dirty-file loop when the next commit only checks in this snapshot. */
+    protected function snapshotOnlyCommit(): bool
+    {
+        if (! File::isFile(AppVersion::flatPath())) {
+            return false;
+        }
+
+        $relative = str_replace('\\', '/', AppVersion::flatPath());
+        $root = rtrim(str_replace('\\', '/', AppVersion::repositoryPath()), '/').'/';
+
+        if (! str_starts_with($relative, $root)) {
+            return false;
+        }
+
+        $changed = $this->runTrimmed('git diff-tree --no-commit-id --name-only -r HEAD');
+        $snapshot = json_decode(File::get(AppVersion::flatPath()), true);
+
+        return $changed === substr($relative, strlen($root))
+            && is_array($snapshot)
+            && ($snapshot['source_commit'] ?? null) === $this->runTrimmed('git rev-parse HEAD^');
     }
 }

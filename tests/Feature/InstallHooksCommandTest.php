@@ -62,6 +62,12 @@ it('honours a custom hooks path reported by git', function (): void {
     expect(File::exists($custom.DIRECTORY_SEPARATOR.'post-commit'))->toBeTrue();
 });
 
+it('upgrades existing hooks to refresh the committed flat file', function (): void {
+    $this->artisan('app:version:install-hooks')->assertSuccessful();
+    $this->artisan('app:version:install-hooks', ['--flat' => true])->assertSuccessful();
+    expect(File::get($this->hooks.DIRECTORY_SEPARATOR.'post-commit'))->toContain('artisan app:version --flat --no-interaction');
+});
+
 it('is a warned no-op outside a git repository so composer scripts stay safe', function (): void {
     File::deleteDirectory($this->workspace.DIRECTORY_SEPARATOR.'.git');
     Process::fake(['git rev-parse --git-path hooks' => Process::result(exitCode: 128)]);

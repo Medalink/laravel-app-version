@@ -14,6 +14,7 @@ function fakeGit(array $overrides = []): void
         static fn (string $output) => Process::result(output: $output),
         array_merge([
             'git rev-parse --short HEAD' => 'abc1234',
+            'git diff-tree --no-commit-id --name-only -r HEAD' => 'app/a.php',
             'git log --format=%H -1 -- VERSION' => 'version-file-sha',
             'git tag --points-at HEAD*' => '',
             'git describe * --abbrev=0 HEAD~1' => '',

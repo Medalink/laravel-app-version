@@ -22,6 +22,10 @@ return [
 
     'json_path' => env('APP_VERSION_JSON_PATH', storage_path('app/version.json')),
 
+    'flat' => (bool) env('APP_VERSION_FLAT', false),
+
+    'flat_path' => env('APP_VERSION_FLAT_PATH', base_path('version-info.json')),
+
     'repository_path' => base_path(),
 
     'tag_prefix' => 'v',

@@ -143,6 +143,24 @@ class AppVersion
         return (string) config('app-version.json_path');
     }
 
+    public static function flatPath(): string
+    {
+        return (string) config('app-version.flat_path', base_path('version-info.json'));
+    }
+
+    /** @param array<string, mixed> $data */
+    public static function usingData(array $data, \Closure $callback): mixed
+    {
+        $previous = self::$cached;
+        self::$cached = $data;
+
+        try {
+            return $callback();
+        } finally {
+            self::$cached = $previous;
+        }
+    }
+
     public static function versionFile(): string
     {
         return (string) config('app-version.version_file');
@@ -185,7 +203,7 @@ class AppVersion
      */
     private static function readJson(): ?array
     {
-        $path = self::jsonPath();
+        $path = config('app-version.flat', false) ? self::flatPath() : self::jsonPath();
 
         if ($path === '' || ! File::exists($path)) {
             return null;

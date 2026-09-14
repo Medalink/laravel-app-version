@@ -49,7 +49,46 @@ php artisan app:version --no-interaction
 php artisan app:release-notes:publish --no-interaction
 ```
 
-### Deploying without Git or database access during the build
+### One committed file for Cloud and other Git-free deployments
+
+Enable flat mode in your published `config/app-version.php`:
+
+```php
+'flat' => true,
+'flat_path' => base_path('version-info.json'),
+```
+
+Generate locally from a complete Git checkout:
+
+```bash
+php artisan app:version --flat
+php artisan app:version:install-hooks --flat
+git add version-info.json
+git commit -m "chore: record version snapshot"
+git push
+```
+
+The single file contains version metadata, line counts, version history, and
+compiled release notes. It needs no database to generate. The hooks refresh it
+after source commits; commit the resulting file before pushing a release. The
+snapshot's `source_commit` identifies the source commit before the artifact-only
+commit. A commit cannot contain its own hash. The hook recognizes that final
+artifact-only commit and leaves the file unchanged.
+
+`AppVersion` reads this committed file at runtime when `flat` is enabled. Remove
+Git-based generation from Cloud build commands. After migrations, load the same
+file into the existing release-note feed and read-state system:
+
+```bash
+php artisan app:release-notes:publish --from-file=version-info.json --no-interaction
+```
+
+No Git executable, repository history, or Git credentials are needed on Cloud.
+Flat generation fails on missing Git data and preserves the previous complete
+file. It does not silently substitute zero counts. Import validates the snapshot
+and upserts releases transactionally, preserving publication dates and read state.
+
+### Separate build artifacts
 
 Create both artifacts while the build checkout still has complete Git history:
 

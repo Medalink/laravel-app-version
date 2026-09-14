@@ -40,6 +40,10 @@ class ReleaseNotesSnapshot
 
         $snapshot = json_decode(File::get($path), true, flags: JSON_THROW_ON_ERROR);
 
+        if (is_array($snapshot) && isset($snapshot['release_notes'])) {
+            $snapshot = $snapshot['release_notes'];
+        }
+
         if (! is_array($snapshot) || ($snapshot['format'] ?? null) !== self::FORMAT_VERSION
             || ($snapshot['build'] ?? null) !== AppVersion::full()
             || ! is_array($snapshot['releases'] ?? null) || $snapshot['releases'] === []) {
