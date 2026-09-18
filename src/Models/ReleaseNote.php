@@ -47,6 +47,17 @@ class ReleaseNote extends Model
     /** @var list<string> */
     public const array SECTIONS = [self::SECTION_NEW, self::SECTION_IMPROVED, self::SECTION_FIXED];
 
+    /**
+     * Display labels in section order, so hosts do not keep a second copy.
+     *
+     * @var array<string, string>
+     */
+    public const array SECTION_LABELS = [
+        self::SECTION_NEW => 'New',
+        self::SECTION_IMPROVED => 'Improved',
+        self::SECTION_FIXED => 'Fixed',
+    ];
+
     public const string GENERATION_MODE_PARSED = 'parsed';
 
     public const string GENERATION_MODE_FALLBACK = 'fallback';
@@ -201,6 +212,25 @@ class ReleaseNote extends Model
             'publishedAt' => $this->published_at?->toIso8601String(),
             'sections' => $compact ? $this->summarySections() : $this->normalizedSections(),
             'featureGroups' => $compact ? [] : $this->featureGroups(),
+            'itemCount' => (int) $this->item_count,
+            'generationMode' => $this->generation_mode,
+        ];
+    }
+
+    /**
+     * A collapsed history row: everything in {@see toFeedArray()} except the
+     * sections and feature groups, which a host loads once the row is opened.
+     *
+     * @return array{version: string, previousVersion: string|null, headline: string, summary: string, publishedAt: string|null, itemCount: int, generationMode: string}
+     */
+    public function toDigestArray(): array
+    {
+        return [
+            'version' => $this->version,
+            'previousVersion' => $this->previous_version,
+            'headline' => $this->headline,
+            'summary' => $this->summary,
+            'publishedAt' => $this->published_at?->toIso8601String(),
             'itemCount' => (int) $this->item_count,
             'generationMode' => $this->generation_mode,
         ];

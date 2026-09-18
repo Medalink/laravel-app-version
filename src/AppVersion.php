@@ -2,6 +2,7 @@
 
 namespace Medalink\AppVersion;
 
+use Illuminate\Support\Carbon;
 use Illuminate\Support\Facades\File;
 use Medalink\AppVersion\Models\ReleaseNote;
 use Medalink\AppVersion\Models\ReleaseNoteRead;
@@ -106,6 +107,44 @@ class AppVersion
     }
 
     /**
+     * Whole days from the repository's first commit to the running commit,
+     * at least 1; null when either date is unknown or unparseable.
+     */
+    public static function commitSpanDays(): ?int
+    {
+        $first = self::firstCommitAt();
+        $last = self::committedAt();
+
+        if ($first === null || $last === null) {
+            return null;
+        }
+
+        try {
+            $seconds = Carbon::parse($last)->getTimestamp() - Carbon::parse($first)->getTimestamp();
+        } catch (\Throwable) {
+            return null;
+        }
+
+        return max(1, (int) ceil($seconds / 86400));
+    }
+
+    /**
+     * "563 commits in 14 days", or just "563 commits" without dates.
+     */
+    public static function commitSpanLabel(): string
+    {
+        $commits = self::stats()['total_commits'];
+        $label = number_format($commits).' '.($commits === 1 ? 'commit' : 'commits');
+        $days = self::commitSpanDays();
+
+        if ($days === null) {
+            return $label;
+        }
+
+        return $label.' in '.number_format($days).' '.($days === 1 ? 'day' : 'days');
+    }
+
+    /**
      * @return array{total_commits: int, commit_additions: int, commit_deletions: int, build_additions: int, build_deletions: int, lifetime_additions: int, lifetime_deletions: int}
      */
     public static function stats(): array
@@ -118,7 +157,7 @@ class AppVersion
     /**
      * Everything a client needs to render the version and its breakdown.
      *
-     * @return array{version: string, build: int, commit: string, full: string, committedAt: string|null, firstCommitAt: string|null, stats: array{total_commits: int, commit_additions: int, commit_deletions: int, build_additions: int, build_deletions: int, lifetime_additions: int, lifetime_deletions: int}}
+     * @return array{version: string, build: int, commit: string, full: string, committedAt: string|null, firstCommitAt: string|null, commitSpanDays: int|null, stats: array{total_commits: int, commit_additions: int, commit_deletions: int, build_additions: int, build_deletions: int, lifetime_additions: int, lifetime_deletions: int}}
      */
     public static function toArray(): array
     {
@@ -129,6 +168,7 @@ class AppVersion
             'full' => self::full(),
             'committedAt' => self::committedAt(),
             'firstCommitAt' => self::firstCommitAt(),
+            'commitSpanDays' => self::commitSpanDays(),
             'stats' => self::stats(),
         ];
     }

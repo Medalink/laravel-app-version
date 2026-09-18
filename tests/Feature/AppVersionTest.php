@@ -82,3 +82,38 @@ it('resolves the VERSION file path relative to the repository root', function ()
 
     expect(AppVersion::versionFileRelativePath())->toBe('config/VERSION');
 });
+
+it('measures the commit span in whole days from the recorded commit dates', function (): void {
+    $this->writeVersionJson('1.0.0', [
+        'committed_at' => '2026-09-02T13:00:00-05:00',
+        'first_commit_at' => '2026-08-19T08:00:00-05:00',
+        'stats' => ['total_commits' => 563],
+    ]);
+
+    expect(AppVersion::commitSpanDays())->toBe(15)
+        ->and(AppVersion::commitSpanLabel())->toBe('563 commits in 15 days')
+        ->and(AppVersion::toArray()['commitSpanDays'])->toBe(15);
+});
+
+it('never reports a span shorter than one day and pluralises the label', function (): void {
+    $this->writeVersionJson('1.0.0', [
+        'committed_at' => '2026-09-02T13:00:00+00:00',
+        'first_commit_at' => '2026-09-02T09:00:00+00:00',
+        'stats' => ['total_commits' => 1],
+    ]);
+
+    expect(AppVersion::commitSpanDays())->toBe(1)
+        ->and(AppVersion::commitSpanLabel())->toBe('1 commit in 1 day');
+});
+
+it('omits the span when the commit dates are missing or unreadable', function (): void {
+    $this->writeVersionJson('1.0.0', ['stats' => ['total_commits' => 42]]);
+
+    expect(AppVersion::commitSpanDays())->toBeNull()
+        ->and(AppVersion::commitSpanLabel())->toBe('42 commits')
+        ->and(AppVersion::toArray()['commitSpanDays'])->toBeNull();
+
+    $this->writeVersionJson('1.0.0', ['committed_at' => 'not a date', 'first_commit_at' => '2026-08-19T08:00:00+00:00']);
+
+    expect(AppVersion::commitSpanDays())->toBeNull();
+});

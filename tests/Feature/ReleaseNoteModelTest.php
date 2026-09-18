@@ -59,3 +59,26 @@ it('builds client payloads with compact or full sections', function (): void {
         ->and($full['featureGroups'][0]['title'])->toBe('Editor')
         ->and($full['publishedAt'])->toBeString();
 });
+
+it('builds a digest without sections or feature groups and labels every section', function (): void {
+    $release = ReleaseNote::factory()->create([
+        'version' => '1.0.0',
+        'previous_version' => '0.9.0',
+        'headline' => 'Digest me',
+        'sections' => [ReleaseNote::SECTION_NEW => ['Full one.']],
+        'item_count' => 1,
+    ]);
+
+    $digest = $release->toDigestArray();
+
+    expect($digest)->toHaveKeys(['version', 'previousVersion', 'headline', 'summary', 'publishedAt', 'itemCount', 'generationMode'])
+        ->and(array_key_exists('sections', $digest))->toBeFalse()
+        ->and(array_key_exists('featureGroups', $digest))->toBeFalse()
+        ->and($digest['version'])->toBe('1.0.0')
+        ->and($digest['previousVersion'])->toBe('0.9.0')
+        ->and($digest['headline'])->toBe('Digest me')
+        ->and($digest['itemCount'])->toBe(1)
+        ->and($digest['publishedAt'])->toBeString()
+        ->and(array_keys(ReleaseNote::SECTION_LABELS))->toBe(ReleaseNote::SECTIONS)
+        ->and(ReleaseNote::SECTION_LABELS[ReleaseNote::SECTION_IMPROVED])->toBe('Improved');
+});

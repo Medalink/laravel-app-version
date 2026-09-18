@@ -144,7 +144,18 @@ Share `AppVersion::toArray()` and `app(ReleaseNotesFeed::class)->describe($user)
 ]
 ```
 
-For an archive page use `ReleaseNote::published()` and `toFeedArray(compact: false)`.
+For a version-history page use `app(ReleaseNotesArchive::class)`. The newest `release_notes.limits.archive_expanded_releases` releases (default 2) come back in full; everything older is a digest without sections or feature groups, so the page stays flat as history grows. `describe()` returns arrays for a client-rendered page, `expanded()` / `older()` return the models for a server-rendered one, and `find($version)` fetches one collapsed body once the row is opened:
+
+```php
+[
+    'releases' => [ /* newest, each with full sections and featureGroups */ ],
+    'olderReleases' => [ /* ReleaseNote::toDigestArray(): version, previousVersion, headline, summary, publishedAt, itemCount, generationMode */ ],
+    'total' => 7,
+    'expandedLimit' => 2,
+]
+```
+
+`ReleaseNote::SECTION_LABELS` maps the section keys to their display labels, and `AppVersion::commitSpanLabel()` renders "563 commits in 14 days" from the recorded first and running commit dates (`commitSpanDays()` for the number, also on `toArray()`).
 
 ## Owning the schema
 

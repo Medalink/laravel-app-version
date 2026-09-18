@@ -152,6 +152,9 @@ return [
             'initial_range_commits' => 25,
             'manual_history_releases' => 1,
             'headline_areas' => 3,
+            // How many of the newest releases a version-history page renders
+            // in full; everything older is a collapsed digest (ReleaseNotesArchive).
+            'archive_expanded_releases' => 2,
         ],
 
         // Null headline/summary resolve to "{app.name} has been updated" and
