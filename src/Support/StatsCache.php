@@ -9,14 +9,20 @@ use Throwable;
  * What `app:version --stats-cache=<file>` remembers between runs, so a run
  * only reads the history it has not seen yet.
  *
- * Commit sums: for each processed commit C, the numstat additions and
+ * Commit entries: for each processed commit C, the numstat additions and
  * deletions summed over every commit reachable from C, and how many commits
  * that is. A commit hash names its whole history, so an entry never goes
  * stale; for an ancestor B of C, reach(C) is reach(B) plus exactly B..C, so
  * lifetime(C) = sums(B) + numstat(B..C) and a range X..C with X an ancestor
- * is sums(C) - sums(X). The entries are only valid for the Git version,
- * diff configuration and attributes they were computed under; a different
- * context discards them.
+ * is sums(C) - sums(X). An entry written for a run's HEAD also keeps the
+ * earliest root-commit date in that history (the next run takes the smaller
+ * of it and the roots in B..C) and, once read, the `git log --format=%H` of
+ * the VERSION file at C. The entries are only valid for the Git version,
+ * configuration, attributes, shallow and graft files and replace refs they
+ * were computed under; a different context discards them.
+ *
+ * VERSION contents: the VERSION file at a commit never changes, so its
+ * contents are kept for the commits the kept listings name.
  *
  * Release payloads: with --flat, each earlier version's release-notes payload
  * keyed by the commits that bound it and the configuration that compiled it.
@@ -24,6 +30,8 @@ use Throwable;
  *
  * The file is a cache: an unreadable or foreign file starts empty, and it is
  * replaced atomically so a concurrent reader never sees half a file.
+ *
+ * @phpstan-type Entry array{additions: int, deletions: int, commits: int, used: int, first_commit_at?: string, version_log?: array{path: string, commits: list<string>}}
  */
 class StatsCache
 {
@@ -34,8 +42,11 @@ class StatsCache
 
     private string $context = '';
 
-    /** @var array<string, array{additions: int, deletions: int, commits: int, used: int}> */
+    /** @var array<string, Entry> */
     private array $commits = [];
+
+    /** @var array<string, string|null> "<commit>:<path>" => trimmed contents, null when absent */
+    private array $versionContents = [];
 
     /** @var array<string, array<string, mixed>> */
     private array $releases = [];
@@ -70,7 +81,15 @@ class StatsCache
                     'deletions' => $entry['deletions'],
                     'commits' => $entry['commits'],
                     'used' => is_int($entry['used'] ?? null) ? $entry['used'] : 0,
+                    ...(is_string($entry['first_commit_at'] ?? null) && $entry['first_commit_at'] !== '' ? ['first_commit_at' => $entry['first_commit_at']] : []),
+                    ...(self::isVersionLog($entry['version_log'] ?? null) ? ['version_log' => $entry['version_log']] : []),
                 ];
+            }
+        }
+
+        foreach (is_array($data['version_contents'] ?? null) ? $data['version_contents'] : [] as $key => $contents) {
+            if (is_string($contents) || $contents === null) {
+                $cache->versionContents[(string) $key] = $contents;
             }
         }
 
@@ -93,8 +112,13 @@ class StatsCache
         return $this->path;
     }
 
+    public function context(): string
+    {
+        return $this->context;
+    }
+
     /**
-     * Commit sums are only comparable under one Git version, diff
+     * Commit entries are only comparable under one Git version,
      * configuration and set of attributes; another context drops them.
      */
     public function useContext(string $context): void
@@ -102,26 +126,23 @@ class StatsCache
         if ($context !== $this->context) {
             $this->context = $context;
             $this->commits = [];
+            $this->versionContents = [];
         }
     }
 
     /**
-     * The cached commit with the most history among $reachable (hash =>
-     * anything): the ancestor that leaves the fewest commits to read.
+     * Entries a run can build on: those written for a run's HEAD (with the
+     * first-commit date), the most history first.
      *
-     * @param  array<string, mixed>  $reachable
+     * @return list<string>
      */
-    public function nearestAncestor(array $reachable): ?string
+    public function candidates(): array
     {
-        $best = null;
+        $candidates = array_filter($this->commits, static fn (array $entry): bool => isset($entry['first_commit_at']));
+        uksort($candidates, fn (string $left, string $right): int => [$this->commits[$right]['commits'], $this->commits[$right]['used'], $left]
+            <=> [$this->commits[$left]['commits'], $this->commits[$left]['used'], $right]);
 
-        foreach ($this->commits as $sha => $entry) {
-            if (isset($reachable[$sha]) && ($best === null || $entry['commits'] > $this->commits[$best]['commits'])) {
-                $best = $sha;
-            }
-        }
-
-        return $best;
+        return array_keys($candidates);
     }
 
     /**
@@ -139,18 +160,79 @@ class StatsCache
         return ['additions' => $additions, 'deletions' => $deletions, 'commits' => $commits];
     }
 
-    public function remember(string $sha, int $additions, int $deletions, int $commits): void
+    public function firstCommitAt(string $sha): ?string
+    {
+        return $this->commits[$sha]['first_commit_at'] ?? null;
+    }
+
+    /** @return list<string>|null */
+    public function versionLog(string $sha, string $path): ?array
+    {
+        $log = $this->commits[$sha]['version_log'] ?? null;
+
+        return $log !== null && $log['path'] === $path ? $log['commits'] : null;
+    }
+
+    /**
+     * Record C's sums. The first-commit date and VERSION listing are kept
+     * when this call does not know them (a range boundary).
+     *
+     * @param  list<string>|null  $versionLog
+     */
+    public function remember(string $sha, int $additions, int $deletions, int $commits, ?string $firstCommitAt = null, ?string $versionPath = null, ?array $versionLog = null): void
     {
         if ($commits < 1 || ! self::isCommitHash($sha)) {
             return;
         }
 
-        $this->commits[$sha] = ['additions' => $additions, 'deletions' => $deletions, 'commits' => $commits, 'used' => time()];
+        $entry = ['additions' => $additions, 'deletions' => $deletions, 'commits' => $commits, 'used' => time()];
+        $previous = $this->commits[$sha] ?? [];
+        $firstCommitAt ??= $previous['first_commit_at'] ?? null;
+
+        if ($firstCommitAt !== null && $firstCommitAt !== '') {
+            $entry['first_commit_at'] = $firstCommitAt;
+        }
+
+        if ($versionPath !== null && $versionLog !== null) {
+            $entry['version_log'] = ['path' => $versionPath, 'commits' => array_values($versionLog)];
+        } elseif (isset($previous['version_log'])) {
+            $entry['version_log'] = $previous['version_log'];
+        }
+
+        $this->commits[$sha] = $entry;
     }
 
     public function forgetCommits(): void
     {
         $this->commits = [];
+        $this->versionContents = [];
+    }
+
+    /**
+     * @param  list<string>  $commits
+     * @return array<string, string|null> the known ones, commit => contents
+     */
+    public function versionContents(string $path, array $commits): array
+    {
+        $known = [];
+
+        foreach ($commits as $commit) {
+            if (array_key_exists("{$commit}:{$path}", $this->versionContents)) {
+                $known[$commit] = $this->versionContents["{$commit}:{$path}"];
+            }
+        }
+
+        return $known;
+    }
+
+    /** @param array<string, string|null> $contents commit => contents */
+    public function rememberVersionContents(string $path, array $contents): void
+    {
+        foreach ($contents as $commit => $value) {
+            if (self::isCommitHash((string) $commit)) {
+                $this->versionContents["{$commit}:{$path}"] = $value;
+            }
+        }
     }
 
     /** @return array<string, mixed>|null */
@@ -190,12 +272,36 @@ class StatsCache
             $commits = array_slice($commits, 0, self::MAX_COMMITS, true);
         }
 
+        $named = [];
+
+        foreach ($commits as $entry) {
+            foreach ($entry['version_log']['commits'] ?? [] as $commit) {
+                $named["{$commit}:{$entry['version_log']['path']}"] = true;
+            }
+        }
+
         File::ensureDirectoryExists(dirname($this->path));
         File::replace($this->path, json_encode([
             'format' => self::FORMAT,
             'context' => $this->context,
             'commits' => (object) $commits,
+            'version_contents' => (object) array_intersect_key($this->versionContents, $named),
             'releases' => (object) $this->releases,
         ], JSON_UNESCAPED_SLASHES | JSON_THROW_ON_ERROR)."\n");
+    }
+
+    private static function isVersionLog(mixed $log): bool
+    {
+        if (! is_array($log) || ! is_string($log['path'] ?? null) || ! is_array($log['commits'] ?? null) || ! array_is_list($log['commits'])) {
+            return false;
+        }
+
+        foreach ($log['commits'] as $commit) {
+            if (! is_string($commit) || ! self::isCommitHash($commit)) {
+                return false;
+            }
+        }
+
+        return true;
     }
 }

@@ -19,11 +19,12 @@ afterEach(function (): void {
     }
 });
 
-it('round-trips commit sums and release payloads', function (): void {
+it('round-trips commit sums, first-commit dates, VERSION listings and release payloads', function (): void {
     $path = statsCacheFile();
     $cache = StatsCache::load($path);
     $cache->useContext('ctx');
-    $cache->remember(statsCacheSha(1), 10, 2, 3);
+    $cache->remember(statsCacheSha(1), 10, 2, 3, '2024-01-01T00:00:00+00:00', 'VERSION', [statsCacheSha(1), statsCacheSha(9)]);
+    $cache->rememberVersionContents('VERSION', [statsCacheSha(1) => '1.1.0', statsCacheSha(9) => null, statsCacheSha(8) => '0.9.0']);
     $cache->rememberRelease('key', ['version' => '1.0.0']);
     $cache->save();
 
@@ -31,7 +32,22 @@ it('round-trips commit sums and release payloads', function (): void {
     $loaded->useContext('ctx');
 
     expect($loaded->sums(statsCacheSha(1)))->toBe(['additions' => 10, 'deletions' => 2, 'commits' => 3])
+        ->and($loaded->firstCommitAt(statsCacheSha(1)))->toBe('2024-01-01T00:00:00+00:00')
+        ->and($loaded->versionLog(statsCacheSha(1), 'VERSION'))->toBe([statsCacheSha(1), statsCacheSha(9)])
+        ->and($loaded->versionLog(statsCacheSha(1), 'config/VERSION'))->toBeNull()
+        // Contents are kept for the commits a kept listing names.
+        ->and($loaded->versionContents('VERSION', [statsCacheSha(1), statsCacheSha(9), statsCacheSha(8)]))->toBe([statsCacheSha(1) => '1.1.0', statsCacheSha(9) => null])
         ->and($loaded->release('key'))->toBe(['version' => '1.0.0']);
+});
+
+it('keeps what a boundary entry does not know when it is remembered again', function (): void {
+    $cache = StatsCache::load(statsCacheFile());
+    $cache->useContext('ctx');
+    $cache->remember(statsCacheSha(1), 10, 2, 3, '2024-01-01T00:00:00+00:00', 'VERSION', [statsCacheSha(1)]);
+    $cache->remember(statsCacheSha(1), 10, 2, 3);
+
+    expect($cache->firstCommitAt(statsCacheSha(1)))->toBe('2024-01-01T00:00:00+00:00')
+        ->and($cache->versionLog(statsCacheSha(1), 'VERSION'))->toBe([statsCacheSha(1)]);
 });
 
 it('starts empty from a missing, unreadable or foreign file', function (?string $contents): void {
@@ -44,7 +60,8 @@ it('starts empty from a missing, unreadable or foreign file', function (?string 
     $cache = StatsCache::load($path);
     $cache->useContext('');
 
-    expect($cache->nearestAncestor([statsCacheSha(1) => 0]))->toBeNull()
+    expect($cache->candidates())->toBe([])
+        ->and($cache->sums(statsCacheSha(1)))->toBeNull()
         ->and($cache->release('key'))->toBeNull();
 })->with([
     'missing' => [null],
@@ -52,28 +69,33 @@ it('starts empty from a missing, unreadable or foreign file', function (?string 
     'another format' => [json_encode(['format' => 99, 'commits' => [statsCacheSha(1) => ['additions' => 1, 'deletions' => 1, 'commits' => 1]]])],
 ]);
 
-it('skips malformed commit entries', function (): void {
+it('skips malformed commit entries and fields', function (): void {
     $path = statsCacheFile();
     File::put($path, json_encode(['format' => StatsCache::FORMAT, 'context' => 'ctx', 'commits' => [
-        statsCacheSha(1) => ['additions' => 1, 'deletions' => 1, 'commits' => 1],
-        'not-a-sha' => ['additions' => 1, 'deletions' => 1, 'commits' => 1],
+        statsCacheSha(1) => ['additions' => 1, 'deletions' => 1, 'commits' => 1, 'first_commit_at' => '2024-01-01T00:00:00+00:00'],
+        'not-a-sha' => ['additions' => 1, 'deletions' => 1, 'commits' => 1, 'first_commit_at' => '2024-01-01T00:00:00+00:00'],
         statsCacheSha(2) => ['additions' => '1', 'deletions' => 1, 'commits' => 1],
         statsCacheSha(3) => ['additions' => 1, 'deletions' => 1, 'commits' => 0],
+        statsCacheSha(4) => ['additions' => 1, 'deletions' => 1, 'commits' => 1, 'first_commit_at' => 5, 'version_log' => ['path' => 'VERSION', 'commits' => ['nope']]],
     ]]));
 
     $cache = StatsCache::load($path);
     $cache->useContext('ctx');
 
-    expect($cache->nearestAncestor([statsCacheSha(1) => 0, 'not-a-sha' => 0, statsCacheSha(2) => 0, statsCacheSha(3) => 0]))->toBe(statsCacheSha(1))
+    expect($cache->candidates())->toBe([statsCacheSha(1)])
         ->and($cache->sums(statsCacheSha(2)))->toBeNull()
-        ->and($cache->sums(statsCacheSha(3)))->toBeNull();
+        ->and($cache->sums(statsCacheSha(3)))->toBeNull()
+        ->and($cache->sums(statsCacheSha(4)))->toBe(['additions' => 1, 'deletions' => 1, 'commits' => 1])
+        ->and($cache->firstCommitAt(statsCacheSha(4)))->toBeNull()
+        ->and($cache->versionLog(statsCacheSha(4), 'VERSION'))->toBeNull();
 });
 
-it('drops commit sums, but not releases, when the context changes', function (): void {
+it('drops commit entries and VERSION contents, but not releases, when the context changes', function (): void {
     $path = statsCacheFile();
     $cache = StatsCache::load($path);
     $cache->useContext('git 2.47');
-    $cache->remember(statsCacheSha(1), 1, 1, 1);
+    $cache->remember(statsCacheSha(1), 1, 1, 1, '2024-01-01T00:00:00+00:00', 'VERSION', [statsCacheSha(1)]);
+    $cache->rememberVersionContents('VERSION', [statsCacheSha(1) => '1.0.0']);
     $cache->rememberRelease('key', ['version' => '1.0.0']);
     $cache->save();
 
@@ -81,18 +103,19 @@ it('drops commit sums, but not releases, when the context changes', function ():
     $loaded->useContext('git 2.48');
 
     expect($loaded->sums(statsCacheSha(1)))->toBeNull()
+        ->and($loaded->versionContents('VERSION', [statsCacheSha(1)]))->toBe([])
         ->and($loaded->release('key'))->toBe(['version' => '1.0.0']);
 });
 
-it('picks the reachable cached commit with the most history', function (): void {
+it('offers the entries written for a run HEAD, the most history first', function (): void {
     $cache = StatsCache::load(statsCacheFile());
     $cache->useContext('');
-    $cache->remember(statsCacheSha(1), 1, 1, 5);
-    $cache->remember(statsCacheSha(2), 1, 1, 9);
+    $cache->remember(statsCacheSha(1), 1, 1, 5, '2024-01-01T00:00:00+00:00');
+    $cache->remember(statsCacheSha(2), 1, 1, 9, '2024-01-01T00:00:00+00:00');
+    // A range boundary: sums only.
     $cache->remember(statsCacheSha(3), 1, 1, 20);
 
-    expect($cache->nearestAncestor([statsCacheSha(1) => 0, statsCacheSha(2) => 1]))->toBe(statsCacheSha(2))
-        ->and($cache->nearestAncestor([statsCacheSha(4) => 0]))->toBeNull();
+    expect($cache->candidates())->toBe([statsCacheSha(2), statsCacheSha(1)]);
 });
 
 it('keeps the most recently used commit entries', function (): void {

@@ -130,15 +130,41 @@ php artisan app:version --flat --stats-cache=/var/cache/app/version-stats.json \
 ```
 
 The cache keeps, per processed commit, the additions, deletions and commit
-count over everything reachable from it. A later run adds the numstat of the
-commits since the nearest cached ancestor, and a build range is the difference
-between HEAD and its (cached) boundary. A rewritten history, a shallow clone
-deepened since, a changed Git version, diff configuration or `.gitattributes`
-reads the whole history once. With `--flat` it also keeps each earlier
-release's notes, keyed by the commits that bound it and the release-notes
-configuration; the running version is always compiled. The output is
-byte-for-byte what the command writes without the cache. The file is only a
-cache: delete it at any time; an unreadable one starts empty.
+count over everything reachable from it, the earliest root-commit date, and
+the VERSION file's commit listing. A later run lists only the commits since
+the cached ancestor with the most history (`git log --numstat HEAD ^<ancestor>`,
+which also proves the ancestry), adds them up, and takes a build range as the
+difference between HEAD and its cached boundary. The VERSION listing is reused
+when the file is unchanged along the first-parent chain back to that ancestor
+(one `git diff-tree`); tags come from one `git for-each-ref`. The nearest
+reachable tag still comes from `git describe`, and the running version's
+subjects from `git log`. A steady run starts about ten Git processes, none of
+which walks the whole history except `git describe` (fast with a
+commit-graph).
+
+Cached entries belong to a context: the Git version; the diff, log, attribute
+and i18n configuration and `core.bigFileThreshold`; the attributes files Git
+reads (the repository's `info/attributes` through the common directory, so
+linked worktrees are covered; the global file; the system file where Git 2.42
+or later names it; the work tree's top-level `.gitattributes` and every tracked
+one); the shallow and graft files; replace refs; and the environment variables
+that redirect them. Another context, a rewritten history or no cached ancestor
+reads the whole history once. With `--flat` the cache also keeps each earlier
+release's notes, keyed by the commits that bound it, the release-notes
+configuration and that context; the running version is always compiled. The
+output is byte-for-byte what the command writes without the cache. An
+untracked `.gitattributes` below the top level is not part of the context:
+delete the cache after adding one. The file is only a cache: delete it at any
+time; an unreadable one starts empty.
+
+`scripts/verify-stats-cache.php` replays a real repository's recent history
+(from a checkout of this package) and fails unless every cached run matches
+the uncached one:
+
+```bash
+php scripts/verify-stats-cache.php /path/to/app --commits=20 --ref=origin/main \
+    --config=/path/to/app/config/app-version.php --app-name=App
+```
 
 `--output` writes the metadata to that file instead of `json_path` (or
 `flat_path` with `--flat`). An explicit `--output` is always written, even when
