@@ -5,7 +5,7 @@ Git-derived application versions and commit-driven release notes for Laravel. Th
 ## What you get
 
 - **`AppVersion`** reads `storage/app/version.json` (generated, never committed) and exposes `version()`, `build()`, `commit()`, `full()`, `stats()`, and `toArray()`. With no JSON present it falls back to the `VERSION` file with build `0` and commit `dev`.
-- **`app:version`** writes that JSON from the `VERSION` file, semver git tags, commit counts, and `--numstat` totals (last commit, this build, lifetime).
+- **`app:version`** writes that JSON from the `VERSION` file, semver git tags, commit counts, and `--numstat` totals (last commit, this build, lifetime). `--stats-cache=<file>` makes repeat runs read only new history; `--output=<path>` writes somewhere other than the configured path.
 - **`app:version:set 1.2.3`** bumps `VERSION` (and `APP_VERSION=` in env files when present), commits `chore: Bump version to 1.2.3`, tags `v1.2.3`, and regenerates the JSON.
 - **`app:version:install-hooks`** writes a managed block into `post-commit`, `post-merge`, `post-checkout`, and `post-rewrite` so the build number stays current locally. The block uses `php` from PATH and falls back to the absolute path of the interpreter that ran the installer, so commits from IDEs, GUI clients, or agent shells without `php` on PATH still refresh the metadata. Re-running upgrades the block; `--uninstall` removes it.
 - **`app:release-notes:publish`** compiles the commit subjects between the previous version boundary and HEAD into New / Improved / Fixed sections, capped summary sections, and feature groups, then upserts a `release_notes` row for the running version. `app:release-notes:backfill` previews or writes notes for older versions.
@@ -117,6 +117,32 @@ silently writing zero counts. Partial clones must have their historical file
 objects available before generation; commit metadata alone cannot provide line
 counts. Build artifacts must be generated during build, not in an ephemeral
 deployment-command filesystem.
+
+### Incremental generation
+
+Lifetime and build line counts come from `git log --numstat` over the whole
+history, which grows with every commit. Give the command a cache file and it
+only reads what it has not seen:
+
+```bash
+php artisan app:version --flat --stats-cache=/var/cache/app/version-stats.json \
+    --output=/srv/releases/42/version-info.json --no-interaction
+```
+
+The cache keeps, per processed commit, the additions, deletions and commit
+count over everything reachable from it. A later run adds the numstat of the
+commits since the nearest cached ancestor, and a build range is the difference
+between HEAD and its (cached) boundary. A rewritten history, a shallow clone
+deepened since, a changed Git version, diff configuration or `.gitattributes`
+reads the whole history once. With `--flat` it also keeps each earlier
+release's notes, keyed by the commits that bound it and the release-notes
+configuration; the running version is always compiled. The output is
+byte-for-byte what the command writes without the cache. The file is only a
+cache: delete it at any time; an unreadable one starts empty.
+
+`--output` writes the metadata to that file instead of `json_path` (or
+`flat_path` with `--flat`). An explicit `--output` is always written, even when
+HEAD only records the committed snapshot.
 
 ## Version resolution
 
