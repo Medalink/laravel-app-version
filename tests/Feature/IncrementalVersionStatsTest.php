@@ -24,7 +24,7 @@ beforeEach(function (): void {
     statsGit($this->workspace, 'config', 'tag.gpgsign', 'false');
     statsGit($this->workspace, 'config', 'core.autocrlf', 'false');
     // Generated files and scratch checkouts stay out of the history under test.
-    File::put($this->workspace.'/.git/info/exclude', "/out/\n/cache/\n/release/\n/storage/\n/shallow/\n/worktree/\n/xdg/\n");
+    File::put($this->workspace.'/.git/info/exclude', "/out/\n/cache/\n/release/\n/releases/\n/storage/\n/shallow/\n/worktree/\n/xdg/\n");
 });
 
 afterEach(function (): void {
@@ -44,11 +44,22 @@ function statsEnvironment(string $name, ?string $value): void
     }
 }
 
-/** Every process really runs; the fake only records what was started. */
-function statsRecordProcesses(): void
+/**
+ * Every process really runs; the fake only records what was started. A
+ * command matching $failing does not run and exits 128 instead.
+ */
+function statsRecordProcesses(?string $failing = null): void
 {
-    Process::fake(function (PendingProcess $pending) {
+    Process::fake(function (PendingProcess $pending) use ($failing) {
         $command = $pending->command;
+        $line = is_array($command) ? implode(' ', $command) : $command;
+
+        if ($failing !== null && preg_match($failing, $line) === 1) {
+            statsCommandLog($line);
+
+            return Process::result(errorOutput: 'fatal: injected failure', exitCode: 128);
+        }
+
         $process = is_array($command)
             ? new SymfonyProcess($command, $pending->path)
             : SymfonyProcess::fromShellCommandline($command, $pending->path);
@@ -58,7 +69,7 @@ function statsRecordProcesses(): void
         }
 
         $process->setTimeout(120)->run();
-        statsCommandLog(is_array($command) ? implode(' ', $command) : $command);
+        statsCommandLog($line);
 
         return Process::result($process->getOutput(), $process->getErrorOutput(), $process->getExitCode());
     });
@@ -132,13 +143,14 @@ function statsUseCheckout(string $path): void
  * files; returns the Git commands the cached run made.
  *
  * @param  array<string, mixed>  $options
+ * @param  string|null  $failing  commands that exit 128 instead of running
  * @return list<string>
  */
-function statsCompare(array $options = ['--flat' => true]): array
+function statsCompare(array $options = ['--flat' => true], ?string $failing = null): array
 {
     $test = test();
     $out = statsOut();
-    statsRecordProcesses();
+    statsRecordProcesses($failing);
 
     $test->artisan('app:version', [...$options, '--output' => "{$out}/full.json"])->assertSuccessful();
     statsCommandLog(clear: true);
@@ -160,7 +172,7 @@ function statsNumstatReads(array $commands): array
     $reads = [];
 
     foreach ($commands as $command) {
-        if (preg_match('/^git log --format=@%H %cI %P --numstat (.+) --$/', $command, $match) === 1) {
+        if (preg_match('/^git log -z --format=@%H %cI %P --numstat (.+) --$/', $command, $match) === 1) {
             $reads[] = $match[1];
         }
     }
@@ -180,6 +192,48 @@ function statsFullWalks(array $commands): array
         '/^git (?:rev-list [0-9a-f]{40} --|rev-list --count HEAD|log --max-parents=0|log --format=%H -- VERSION|log --format= --numstat$)/',
         $command,
     ) === 1));
+}
+
+/**
+ * A release as a deploy makes one: a new linked worktree of the repository at
+ * releases/<name>, with its own copy of this package's code in vendor/.
+ */
+function statsRelease(string $workspace, string $name, string $commit): string
+{
+    $release = $workspace.'/releases/'.$name;
+    statsGit($workspace, 'worktree', 'add', '--quiet', '--detach', $release, $commit);
+
+    foreach (['src', 'config', 'database'] as $directory) {
+        File::copyDirectory(dirname(__DIR__, 2).'/'.$directory, $release.'/vendor/medalink/laravel-app-version/'.$directory);
+    }
+
+    return $release;
+}
+
+/**
+ * Runs app:version in its own PHP process from the release's copy of the
+ * package, in the release's checkout.
+ *
+ * @param  array<string, mixed>  $options
+ * @return list<string> the Git commands it started
+ */
+function statsReleaseRun(string $release, array $options): array
+{
+    $log = statsOut().'/'.basename($release).'-commands.log';
+    File::ensureDirectoryExists(dirname($log));
+    $process = new SymfonyProcess([
+        PHP_BINARY,
+        dirname(__DIR__).'/Fixtures/release-run.php',
+        $release.'/vendor/medalink/laravel-app-version',
+        $release,
+        $log,
+        json_encode($options, JSON_THROW_ON_ERROR),
+    ]);
+    $process->setTimeout(300)->run();
+
+    expect($process->isSuccessful())->toBeTrue('release-run.php: '.$process->getErrorOutput().$process->getOutput());
+
+    return array_values(array_filter(explode("\n", str_replace("\r\n", "\n", File::get($log)))));
 }
 
 /** Where the compared files go: next to the cache, outside the history. */
@@ -316,16 +370,99 @@ it('reads only the commits since the last run, with no walk over the whole histo
         'git log -1 --format=%H%n%h%n%cI HEAD --',
         'git --version',
         'git var -l',
-        'git rev-parse --git-path info/attributes --git-path shallow --git-path info/grafts --show-toplevel',
-        'git ls-files -s -- :(glob)**/.gitattributes',
+        'git rev-parse --git-path info/attributes --git-path shallow --git-path info/grafts --show-toplevel --show-prefix',
+        'git ls-files -s -z --full-name -- :(top,glob)**/.gitattributes',
         'git for-each-ref --format=%(refname) %(refname:short) %(objectname) %(*objectname) %(*objecttype) refs/tags refs/replace',
         'git describe --tags --match v[0-9]*.[0-9]*.[0-9]* --abbrev=0',
-        "git log --format=@%H %cI %P --numstat {$head} ^{$deployed} --",
+        "git log -z --format=@%H %cI %P --numstat {$head} ^{$deployed} --",
         'git diff-tree --stdin -r --name-only -- VERSION',
         "git log --format=%s {$released}..HEAD",
     ])->and(statsFullWalks($commands))->toBe([])
         ->and(statsJson())->toMatchArray(['version' => '0.2.0', 'build' => 3])
         ->and(collect(statsJson()['release_notes']['releases'])->pluck('version')->all())->toBe(['0.1.0', '0.2.0']);
+});
+
+it('builds on the previous release from a new linked worktree with its own copy of the package', function (): void {
+    $ws = $this->workspace;
+    $this->writeVersionFile('0.1.0');
+    statsCommit($ws, 'feat: add the editor', [
+        'app/editor.php' => statsLines(10, 'editor'),
+        '.gitattributes' => "*.png binary\n",
+    ]);
+    statsGit($ws, 'tag', '-a', 'v0.1.0', '-m', 'v0.1.0');
+    statsCommit($ws, 'Grow the editor', ['app/editor.php' => statsLines(15, 'editor')]);
+    $this->writeVersionFile('0.2.0');
+    statsCommit($ws, 'chore: Bump version to 0.2.0');
+    $first = statsCommit($ws, 'feat: add comments', ['app/comments.php' => statsLines(10, 'comment')]);
+
+    // The previous deploy ran in releases/one with its own vendor/.
+    statsReleaseRun(statsRelease($ws, 'one', $first), ['--flat' => true, '--stats-cache' => $this->cachePath, '--output' => statsOut().'/one.json']);
+
+    // The next deploy checks out releases/two next to it.
+    $second = statsCommit($ws, 'Fix comment spacing', ['app/comments.php' => statsLines(11, 'comment')]);
+    $two = statsRelease($ws, 'two', $second);
+    $commands = statsReleaseRun($two, ['--flat' => true, '--stats-cache' => $this->cachePath, '--output' => statsOut().'/cached.json']);
+
+    statsUseCheckout($two);
+    $this->artisan('app:version', ['--flat' => true, '--output' => statsOut().'/full.json'])->assertSuccessful();
+
+    expect(File::get(statsOut().'/cached.json'))->toBe(File::get(statsOut().'/full.json'))
+        ->and(statsNumstatReads($commands))->toBe(["{$second} ^{$first}"])
+        ->and(statsFullWalks($commands))->toBe([])
+        // 0.1.0 comes from the cache: only the running version reads subjects.
+        ->and(array_values(array_filter($commands, static fn (string $command): bool => str_starts_with($command, 'git log --format=%s '))))->toHaveCount(1)
+        ->and(collect(statsJson()['release_notes']['releases'])->pluck('version')->all())->toBe(['0.1.0', '0.2.0']);
+});
+
+it('forgets a cached commit the repository no longer has and builds on the others', function (array $options): void {
+    $ws = $this->workspace;
+    $this->writeVersionFile('0.1.0');
+    statsCommit($ws, 'feat: add the editor', ['app/editor.php' => statsLines(10, 'editor')]);
+    $deployed = statsCommit($ws, 'Grow the editor', ['app/editor.php' => statsLines(15, 'editor')]);
+    statsCompare($options);
+
+    // A branch deploy whose commits were pruned since, or a cache kept across
+    // a new clone: the entry with the most history names a missing commit.
+    $gone = str_repeat('de', 20);
+    $cache = json_decode(File::get($this->cachePath), true);
+    $cache['commits'][$gone] = ['additions' => 1, 'deletions' => 1, 'commits' => 999, 'used' => 1, 'first_commit_at' => '2020-01-01T00:00:00+00:00'];
+    $cache['commits'][str_repeat('ad', 20)] = ['additions' => 1, 'deletions' => 1, 'commits' => 3, 'used' => 1];
+    File::put($this->cachePath, json_encode($cache));
+    $head = statsCommit($ws, 'Grow the editor again', ['app/editor.php' => statsLines(18, 'editor')]);
+
+    expect(statsNumstatReads(statsCompare($options)))->toBe(["{$head} ^{$gone}", "{$head} ^{$deployed}"])
+        ->and(array_keys(json_decode(File::get($this->cachePath), true)['commits']))->toContain($head)
+        ->not->toContain($gone)
+        ->not->toContain(str_repeat('ad', 20));
+
+    // The next run builds on HEAD straight away.
+    $next = statsCommit($ws, 'Grow the editor once more', ['app/editor.php' => statsLines(20, 'editor')]);
+
+    expect(statsNumstatReads(statsCompare($options)))->toBe(["{$next} ^{$head}"]);
+})->with([
+    '--flat' => [['--flat' => true]],
+    '--strict' => [['--strict' => true]],
+    'version.json' => [[]],
+]);
+
+it('reads the whole history once when listing against a cached commit that exists keeps failing', function (): void {
+    $ws = $this->workspace;
+    $this->writeVersionFile('0.1.0');
+    statsCommit($ws, 'feat: add the editor', ['app/editor.php' => statsLines(10, 'editor')]);
+    $deployed = statsCommit($ws, 'Grow the editor', ['app/editor.php' => statsLines(15, 'editor')]);
+    statsCompare();
+    $head = statsCommit($ws, 'Grow the editor again', ['app/editor.php' => statsLines(18, 'editor')]);
+
+    $commands = statsCompare(failing: '/--numstat [0-9a-f]{40} \^/');
+
+    expect(statsNumstatReads($commands))->toBe(["{$head} ^{$deployed}", $head])
+        ->and(json_decode(File::get($this->cachePath), true)['commits'])->toHaveKey($head)
+        ->not->toHaveKey($deployed);
+
+    // The next run builds on HEAD again.
+    $next = statsCommit($ws, 'Grow the editor once more', ['app/editor.php' => statsLines(20, 'editor')]);
+
+    expect(statsNumstatReads(statsCompare()))->toBe(["{$next} ^{$head}"]);
 });
 
 it('reads the VERSION history again when the first-parent chain changes the file', function (): void {
@@ -516,6 +653,49 @@ it('discards cached sums when an attributes file Git reads changes', function (C
             statsCommit($ws, 'Treat the application code as binary', ['app/.gitattributes' => "*.php binary\n"]);
         },
     ],
+    'an untracked nested .gitattributes file' => [
+        function (string $ws): void {
+            File::put($ws.'/app/.gitattributes', "*.php binary\n");
+        },
+    ],
+    'an unstaged change to a tracked nested .gitattributes file' => [
+        function (string $ws): void {
+            File::put($ws.'/app/.gitattributes', "*.php binary\n");
+        },
+        function (string $ws): void {
+            statsCommit($ws, 'Mark the images', ['app/.gitattributes' => "*.png binary\n"]);
+        },
+    ],
+    'an ignored .gitattributes file in a directory only the history has' => [
+        function (string $ws): void {
+            File::append($ws.'/.git/info/exclude', "/legacy/\n");
+            File::ensureDirectoryExists($ws.'/legacy');
+            File::put($ws.'/legacy/.gitattributes', "*.php -diff\n");
+        },
+        function (string $ws): void {
+            statsCommit($ws, 'Add the legacy importer', ['legacy/import.php' => statsLines(30, 'import')]);
+            statsCommit($ws, 'Remove the legacy importer', ['legacy/import.php' => null]);
+        },
+    ],
+    'an untracked .gitattributes file above a repository path in a subdirectory' => [
+        function (string $ws): void {
+            File::put($ws.'/lib/.gitattributes', "*.php binary\n");
+        },
+        function (string $ws): void {
+            statsCommit($ws, 'Add the helpers', ['lib/helpers.php' => statsLines(40, 'helper'), 'site/VERSION' => "0.1.0\n"]);
+            statsUseCheckout($ws.'/site');
+        },
+    ],
+    'an untracked .gitattributes file under a repository path in a subdirectory with diff.relative' => [
+        function (string $ws): void {
+            File::put($ws.'/site/app/.gitattributes', "*.php binary\n");
+        },
+        function (string $ws): void {
+            statsCommit($ws, 'Add the site', ['site/app/page.php' => statsLines(40, 'page'), 'site/VERSION' => "0.1.0\n"]);
+            statsGit($ws, 'config', 'diff.relative', 'true');
+            statsUseCheckout($ws.'/site');
+        },
+    ],
     'the global attributes file' => [
         function (string $ws): void {
             File::put($ws.'/xdg/git/attributes', "*.php binary\n");
@@ -532,6 +712,28 @@ it('discards cached sums when an attributes file Git reads changes', function (C
         },
     ],
 ]);
+
+it('does not use the cache while attributes are read from a tree that can move', function (): void {
+    $ws = $this->workspace;
+    $this->writeVersionFile('0.1.0');
+    statsCommit($ws, 'feat: add the editor', ['app/editor.php' => statsLines(60, 'editor')]);
+    statsGit($ws, 'checkout', '--quiet', '-b', 'attributes');
+    statsCommit($ws, 'Mark the documents', ['.gitattributes' => "*.md binary\n"]);
+    statsGit($ws, 'checkout', '--quiet', 'main');
+    statsGit($ws, 'config', 'attr.tree', 'refs/heads/attributes');
+
+    $commands = statsCompare([]);
+    $before = statsJson()['stats']['lifetime_additions'];
+
+    // The branch moves; nothing in the work tree, index or configuration does.
+    statsGit($ws, 'checkout', '--quiet', 'attributes');
+    statsCommit($ws, 'Mark the code', ['.gitattributes' => "*.php binary\n"]);
+    statsGit($ws, 'checkout', '--quiet', 'main');
+
+    expect(statsNumstatReads($commands))->toBe([])
+        ->and(statsNumstatReads(statsCompare([])))->toBe([])
+        ->and(statsJson()['stats']['lifetime_additions'])->not->toBe($before);
+});
 
 it('takes the earliest root when an unrelated history is merged in', function (): void {
     $ws = $this->workspace;
@@ -601,7 +803,7 @@ it('reuses earlier releases and compiles only the running version', function ():
     expect(collect(statsJson()['release_notes']['releases'])->firstWhere('version', '0.1.0')['headline'])->not->toBe('From the cache');
 });
 
-it('falls back to the uncached collection unless metadata must be complete', function (): void {
+it('falls back to the uncached collection in every mode when the cached read fails', function (): void {
     $this->writeVersionFile('1.5.0');
     Process::fake([
         'git log -1 --format=%H%n%h%n%cI HEAD --' => Process::result(output: str_repeat('a', 40)."\naaaaaaa\n2026-01-01T00:00:00+00:00\n"),
@@ -617,19 +819,29 @@ it('falls back to the uncached collection unless metadata must be complete', fun
         '*' => Process::result(output: ''),
     ]);
 
-    $this->artisan('app:version', ['--stats-cache' => $this->cachePath])->assertSuccessful();
+    $expected = function (): void {
+        expect(json_decode(File::get($this->workspace.'/storage/version.json'), true))->toMatchArray([
+            'commit' => 'abc1234',
+            'build' => 7,
+        ])->and(json_decode(File::get($this->workspace.'/storage/version.json'), true)['stats'])->toMatchArray([
+            'build_additions' => 50,
+            'lifetime_additions' => 1000,
+            'commit_additions' => 10,
+        ])->and(File::exists($this->cachePath))->toBeFalse();
+    };
 
-    expect(json_decode(File::get($this->workspace.'/storage/version.json'), true))->toMatchArray([
-        'commit' => 'abc1234',
-        'build' => 7,
-    ])->and(json_decode(File::get($this->workspace.'/storage/version.json'), true)['stats'])->toMatchArray([
-        'build_additions' => 50,
-        'lifetime_additions' => 1000,
-        'commit_additions' => 10,
-    ])->and(File::exists($this->cachePath))->toBeFalse();
+    $this->artisan('app:version', ['--stats-cache' => $this->cachePath])->assertSuccessful();
+    $expected();
+
+    // --strict holds the uncached collection to it, not the cache.
+    File::delete($this->workspace.'/storage/version.json');
+    $this->artisan('app:version', ['--stats-cache' => $this->cachePath, '--strict' => true])->assertSuccessful();
+    $expected();
+
+    Process::fake(['git log --format= --numstat' => Process::result(errorOutput: 'fatal: bad object', exitCode: 128)]);
 
     expect(fn () => $this->artisan('app:version', ['--stats-cache' => $this->cachePath, '--strict' => true])->run())
-        ->toThrow(RuntimeException::class, 'Unable to collect version statistics');
+        ->toThrow(RuntimeException::class, 'Unable to collect version statistics: git log --format= --numstat');
 });
 
 it('writes an explicit --output even when HEAD only records the committed snapshot', function (): void {

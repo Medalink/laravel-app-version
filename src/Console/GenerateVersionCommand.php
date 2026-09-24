@@ -79,23 +79,17 @@ class GenerateVersionCommand extends Command
         if ($cache !== null) {
             try {
                 $history = IncrementalHistory::read(AppVersion::repositoryPath(), $cache, AppVersion::versionFileRelativePath());
-                $data = $this->collect($fallbackVersion, $history);
-            } catch (RuntimeException $e) {
-                if ($this->requiresCompleteMetadata()) {
-                    throw $e;
-                }
-
-                // The uncached collection decides what an unreadable history yields.
-                $history = null;
+                $data = $this->generate($fallbackVersion, $flat, $cache, $history);
+            } catch (RuntimeException) {
+                // Whatever went wrong with the cached read is a cache miss:
+                // the uncached collection below decides, under --strict and
+                // --flat, whether an unreadable history fails the command. A
+                // history that was read is still saved for the next run.
+                $data = null;
             }
         }
 
-        $data ??= $this->collect($fallbackVersion, null);
-
-        if ($flat) {
-            $data['source_commit'] = $history !== null ? $history->head() : $this->runTrimmed('git rev-parse HEAD');
-            $data['release_notes'] = $this->releaseNotes($data, $cache, $history);
-        }
+        $data ??= $this->generate($fallbackVersion, $flat, null, null);
 
         $outputPath = $output ?? ($flat ? AppVersion::flatPath() : AppVersion::jsonPath());
         File::ensureDirectoryExists(dirname($outputPath));
@@ -129,6 +123,24 @@ class GenerateVersionCommand extends Command
         ]);
 
         return self::SUCCESS;
+    }
+
+    /**
+     * The metadata the command writes: {@see collect()}, and with --flat the
+     * source commit and every release's notes.
+     *
+     * @return array<string, mixed>
+     */
+    protected function generate(string $fallbackVersion, bool $flat, ?StatsCache $cache, ?IncrementalHistory $history): array
+    {
+        $data = $this->collect($fallbackVersion, $history);
+
+        if ($flat) {
+            $data['source_commit'] = $history !== null ? $history->head() : $this->runTrimmed('git rev-parse HEAD');
+            $data['release_notes'] = $this->releaseNotes($data, $cache, $history);
+        }
+
+        return $data;
     }
 
     /**
@@ -343,27 +355,33 @@ class GenerateVersionCommand extends Command
      * the classes that turn commits into a payload, and the Git context
      * (configuration, replace refs) the subjects were read under. Null (no
      * caching) when the configuration cannot be fingerprinted.
+     *
+     * The code counts by class name and file contents, never by path: every
+     * release installs its own copy of vendor/, so the same code sits at a
+     * new path on each deploy.
      */
     protected function releaseFingerprint(ReleaseNotesPublisher $publisher, string $gitContext): ?string
     {
-        $files = [];
+        $code = [];
 
-        foreach ([$publisher, app(ReleaseNotesCompiler::class), app(ReleaseCommitSource::class), ReleaseNote::class, SemanticVersion::class] as $class) {
+        foreach ([$publisher, app(ReleaseNotesCompiler::class), app(ReleaseCommitSource::class), ReleaseNote::class, SemanticVersion::class, AppVersion::class] as $class) {
             for ($reflection = new ReflectionClass($class); $reflection !== false; $reflection = $reflection->getParentClass()) {
                 $file = $reflection->getFileName();
 
                 if ($file !== false) {
-                    $files[$file] = hash_file('sha256', $file);
+                    $code[$reflection->getName()] = hash_file('sha256', $file);
                 }
             }
         }
+
+        ksort($code);
 
         try {
             return hash('sha256', serialize([
                 config('app-version.release_notes'),
                 config('app.name'),
                 config('app-version.tag_prefix'),
-                $files,
+                $code,
                 $gitContext,
             ]));
         } catch (Throwable) {

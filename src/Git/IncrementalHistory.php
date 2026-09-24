@@ -42,12 +42,27 @@ use RuntimeException;
  *   has proven it an ancestor.
  *
  * The entries are tied to a context: the Git version, the configuration that
- * changes numstat or log output, the attributes files Git reads (the
- * repository's info/attributes through the common directory, the global and
- * system files, the top-level and every tracked .gitattributes), the shallow
- * and graft files, replace refs and the environment variables that redirect
- * them. Another context discards them. Git failures throw; the caller falls
- * back to the uncached collection.
+ * changes numstat or log output, the contents of the attributes files Git
+ * reads (the repository's info/attributes through the common directory, the
+ * global and system files, the top-level and every tracked .gitattributes in
+ * the index and the work tree), the shallow and graft files, replace refs and
+ * the environment variables that redirect them. Another context discards
+ * them. The context names no path, so a new linked worktree per release
+ * builds on the previous release's run.
+ *
+ * A numstat looks up the attributes of every path it lists in the work
+ * tree's .gitattributes of each directory above that path, tracked or not,
+ * and ignored or not, so an untracked file in any directory the history
+ * touches changes what the whole history sums to. The cache keeps every
+ * directory its listings named and the contents of the work tree's
+ * .gitattributes in them; a run that finds any of those files changed
+ * forgets the entries. Attributes read from a tree instead (attr.tree,
+ * GIT_ATTR_SOURCE) change with that tree's history, so the cache is not used
+ * with them.
+ *
+ * A cached entry the repository cannot list against (its commit is gone) is
+ * forgotten and the history read without it. Any other Git failure throws;
+ * the caller falls back to the uncached collection.
  */
 class IncrementalHistory
 {
@@ -70,6 +85,15 @@ class IncrementalHistory
     private string $committedAt = '';
 
     private string $context = '';
+
+    /** The work tree's top level, where Git reads per-directory attributes. */
+    private string $top = '';
+
+    /** The repository path below the top level ("sub/"), empty at the top. */
+    private string $prefix = '';
+
+    /** @var array<string, true> directories above the paths this run listed */
+    private array $directories = [];
 
     private bool $logFollows = false;
 
@@ -121,8 +145,8 @@ class IncrementalHistory
             'head' => ['log', '-1', '--format=%H%n%h%n%cI', 'HEAD', '--'],
             'version' => ['--version'],
             'var' => ['var', '-l'],
-            'paths' => ['rev-parse', '--git-path', 'info/attributes', '--git-path', 'shallow', '--git-path', 'info/grafts', '--show-toplevel'],
-            'attributes' => ['ls-files', '-s', '--', ':(glob)**/.gitattributes'],
+            'paths' => ['rev-parse', '--git-path', 'info/attributes', '--git-path', 'shallow', '--git-path', 'info/grafts', '--show-toplevel', '--show-prefix'],
+            'attributes' => ['ls-files', '-s', '-z', '--full-name', '--', ':(top,glob)**/.gitattributes'],
             'refs' => ['for-each-ref', '--format=%(refname) %(refname:short) %(objectname) %(*objectname) %(*objecttype)', 'refs/tags', 'refs/replace'],
         ], optional: ['var']);
 
@@ -135,6 +159,12 @@ class IncrementalHistory
         [$history->head, $history->shortHead, $history->committedAt] = $lines;
         $history->readRefs($results['refs']->output());
         $cache->useContext($history->context = $history->readContext($results));
+
+        // Attributes files that appeared or changed in a directory the cached
+        // history touches change what that history sums to.
+        if ($cache->directoryAttributes() !== $history->directoryAttributes($cache->directories())) {
+            $cache->forgetCommits();
+        }
 
         if ($history->exactSemverTag() !== null) {
             $history->startDescribe('HEAD~1');
@@ -324,6 +354,9 @@ class IncrementalHistory
             $this->versionLog,
         );
         $this->cache->rememberVersionContents($this->versionPath, $this->versionContents);
+
+        $directories = array_values(array_unique([...$this->cache->directories(), ...array_keys($this->directories)]));
+        $this->cache->rememberDirectories($directories, $this->directoryAttributes($directories));
     }
 
     /**
@@ -397,38 +430,62 @@ class IncrementalHistory
             : $this->configFallback();
         $config = [];
         $attributeFiles = [];
+        $attributeTree = false;
 
         foreach (explode("\n", $variables) as $line) {
             if (preg_match(self::CONTEXT_CONFIG, $line) === 1) {
                 $config[] = $line;
                 $this->logFollows = $this->logFollows || preg_match('/^log\.follow(?:[=\s]|$)/i', $line) === 1;
+                $attributeTree = $attributeTree || preg_match('/^attr\.tree(?:[=\s]|$)/i', $line) === 1;
             } elseif (preg_match('/^GIT_ATTR_(SYSTEM|GLOBAL)=(.+)$/', $line, $match) === 1) {
                 $attributeFiles[$match[1]] = $match[2];
             }
         }
 
+        $attributeSource = getenv('GIT_ATTR_SOURCE');
+
+        if ($attributeTree || (is_string($attributeSource) && $attributeSource !== '')) {
+            // The attributes are those of a revision (HEAD, a branch) that
+            // moves without anything this context could see.
+            throw new RuntimeException('Unable to use the stats cache: attributes are read from a tree (attr.tree or GIT_ATTR_SOURCE)');
+        }
+
         // Git before 2.42 does not report the global attributes file.
         $attributeFiles['GLOBAL'] ??= $this->globalAttributesFile($config);
-        [$info, $shallow, $grafts, $top] = array_pad(explode("\n", $this->output($results['paths'])), 4, '');
-        // The work tree's top-level file counts even while it is untracked.
-        $files = ['info' => $info, 'shallow' => $shallow, 'grafts' => $grafts, 'top' => $top !== '' ? $top.'/.gitattributes' : null, ...$attributeFiles];
-        $tracked = $this->output($results['attributes'], allowEmpty: true);
+        [$info, $shallow, $grafts, $this->top, $this->prefix] = array_pad(explode("\n", $this->output($results['paths'])), 5, '');
 
-        foreach (explode("\n", $tracked) as $line) {
-            $path = explode("\t", $line, 2)[1] ?? '';
+        if ($this->top === '') {
+            // No work tree: Git reads attributes some other way.
+            throw new RuntimeException('Unable to use the stats cache: the repository has no work tree');
+        }
+
+        // The work tree's top-level file counts even while it is untracked;
+        // every other directory's is in directoryAttributes().
+        $files = ['info' => $info, 'shallow' => $shallow, 'grafts' => $grafts, 'top' => $this->top.'/.gitattributes', ...$attributeFiles];
+        // "<mode> <blob> <stage>\t<path from the top>" per index entry: Git
+        // reads the index's copy where the work tree has none.
+        $tracked = array_values(array_filter(explode("\0", $results['attributes']->output()), static fn (string $entry): bool => $entry !== ''));
+
+        foreach ($tracked as $entry) {
+            $path = explode("\t", $entry, 2)[1] ?? '';
 
             if ($path !== '') {
-                $files["tracked:{$path}"] = $path;
+                $files["tracked:{$path}"] = $this->top.'/'.$path;
             }
         }
 
         $hashes = [];
 
+        // Each file by its role and contents, never its path: every release
+        // is a new linked worktree of the same repository, so the top-level
+        // file sits at a new path on every deploy (and Git names the common
+        // directory's files one way from the main worktree, another from a
+        // linked one) while what Git reads is the same.
         foreach ($files as $name => $file) {
             $absolute = $file !== null && $file !== '' && ! preg_match('#^(?:/|[A-Za-z]:[\\\\/])#', $file)
                 ? $this->repository.DIRECTORY_SEPARATOR.$file
                 : $file;
-            $hashes[$name] = [$file, $absolute !== null && $absolute !== '' && is_file($absolute) ? hash_file('sha256', $absolute) : null];
+            $hashes[$name] = $absolute !== null && $absolute !== '' && is_file($absolute) ? hash_file('sha256', $absolute) : null;
         }
 
         $replaceRefs = array_values(array_filter($this->refs, static fn (array $ref): bool => ! str_starts_with($ref['ref'], 'refs/tags/')));
@@ -447,6 +504,49 @@ class IncrementalHistory
             $replaceRefs,
             $environment,
         ]));
+    }
+
+    /**
+     * Fingerprint of the work tree's .gitattributes in the given directories
+     * (relative to the top level): the ones that exist, by contents.
+     *
+     * @param  list<string>  $directories
+     */
+    private function directoryAttributes(array $directories): string
+    {
+        sort($directories, SORT_STRING);
+        $hashes = [];
+
+        foreach ($directories as $directory) {
+            $file = $this->top.'/'.$directory.'/.gitattributes';
+
+            if (is_file($file)) {
+                $hashes[$directory] = hash_file('sha256', $file);
+            }
+        }
+
+        return hash('sha256', serialize($hashes));
+    }
+
+    /**
+     * Note the directories above a listed path, top level excluded. A path is
+     * read from the top level; under diff.relative it is shown relative to the
+     * repository path, so that reading is noted too.
+     */
+    private function noteDirectories(string $path): void
+    {
+        foreach ($this->prefix !== '' ? [$path, $this->prefix.$path] : [$path] as $directory) {
+            while (($slash = strrpos($directory, '/')) !== false && $slash > 0) {
+                $directory = substr($directory, 0, $slash);
+
+                if (isset($this->directories[$directory])) {
+                    // Every directory above it is noted already.
+                    break;
+                }
+
+                $this->directories[$directory] = true;
+            }
+        }
     }
 
     private function configFallback(): string
@@ -528,6 +628,106 @@ class IncrementalHistory
     {
         $candidates = $this->cache->candidates();
 
+        try {
+            $this->readDeltaFrom($candidates);
+        } catch (RuntimeException $e) {
+            // Without an entry this was the whole history: the repository
+            // itself cannot be read.
+            if ($candidates === []) {
+                throw $e;
+            }
+
+            $this->recoverDelta($candidates);
+        }
+
+        $sums = $this->base !== null ? $this->cache->sums($this->base) : null;
+        $lifetime = $sums ?? ['additions' => 0, 'deletions' => 0, 'commits' => 0];
+        $roots = $this->base !== null ? [$this->cache->firstCommitAt($this->base)] : [];
+
+        foreach ($this->delta as $commit) {
+            $lifetime['additions'] += $commit['additions'];
+            $lifetime['deletions'] += $commit['deletions'];
+
+            if ($commit['parents'] === []) {
+                $roots[] = $commit['date'];
+            }
+        }
+
+        $lifetime['commits'] += count($this->delta);
+        $this->lifetime = $lifetime;
+        $roots = array_values(array_filter($roots, static fn (?string $date): bool => $date !== null && $date !== ''));
+        usort($roots, strcmp(...));
+        $this->firstCommitAt = $roots[0] ?? null;
+    }
+
+    /**
+     * The listing or an ancestry test failed on a cached entry. An entry
+     * naming a commit the repository no longer has (a pruned branch deploy, a
+     * re-cloned repository under a kept cache, gc after a force-push) makes
+     * both exit 128: every such entry is forgotten and the rest are tried
+     * again. When none was missing, or the retry fails too, no entry is
+     * trusted and the whole history is read. Either way the cache this run
+     * saves no longer holds what failed.
+     *
+     * @param  list<string>  $candidates
+     */
+    private function recoverDelta(array $candidates): void
+    {
+        $missing = $this->missingCommits($this->cache->commitHashes());
+        $this->cache->forget($missing);
+
+        if (array_intersect($candidates, $missing) !== []) {
+            try {
+                $this->readDeltaFrom($this->cache->candidates());
+
+                return;
+            } catch (RuntimeException) {
+                // Fall through to the whole history.
+            }
+        }
+
+        $this->cache->forgetCommits();
+        $this->readDeltaFrom([]);
+    }
+
+    /**
+     * The listed hashes that do not name a commit in the repository, from one
+     * `git cat-file --batch-check`.
+     *
+     * @param  list<string>  $commits
+     * @return list<string>
+     */
+    private function missingCommits(array $commits): array
+    {
+        if ($commits === []) {
+            return [];
+        }
+
+        $output = $this->git(['cat-file', '--batch-check=%(objectname) %(objecttype)'], implode("\n", $commits)."\n")->output();
+        $found = [];
+
+        foreach (explode("\n", str_replace("\r\n", "\n", $output)) as $line) {
+            [$object, $type] = array_pad(explode(' ', trim($line), 2), 2, '');
+
+            if ($type === 'commit') {
+                $found[$object] = true;
+            }
+        }
+
+        return array_values(array_filter($commits, static fn (string $commit): bool => ! isset($found[$commit])));
+    }
+
+    /**
+     * Find the base entry among the candidates and list what HEAD adds to
+     * it, or HEAD's whole history without one.
+     *
+     * @param  list<string>  $candidates
+     */
+    private function readDeltaFrom(array $candidates): void
+    {
+        $this->base = null;
+        $this->delta = [];
+
         if (in_array($this->head, $candidates, true)) {
             $this->base = $this->head;
         } elseif ($candidates === []) {
@@ -556,25 +756,6 @@ class IncrementalHistory
                 }
             }
         }
-
-        $sums = $this->base !== null ? $this->cache->sums($this->base) : null;
-        $lifetime = $sums ?? ['additions' => 0, 'deletions' => 0, 'commits' => 0];
-        $roots = $this->base !== null ? [$this->cache->firstCommitAt($this->base)] : [];
-
-        foreach ($this->delta as $commit) {
-            $lifetime['additions'] += $commit['additions'];
-            $lifetime['deletions'] += $commit['deletions'];
-
-            if ($commit['parents'] === []) {
-                $roots[] = $commit['date'];
-            }
-        }
-
-        $lifetime['commits'] += count($this->delta);
-        $this->lifetime = $lifetime;
-        $roots = array_values(array_filter($roots, static fn (?string $date): bool => $date !== null && $date !== ''));
-        usort($roots, strcmp(...));
-        $this->firstCommitAt = $roots[0] ?? null;
     }
 
     private function listsParent(string $commit): bool
@@ -616,31 +797,68 @@ class IncrementalHistory
     /**
      * Per-commit numstat sums, committer dates and parents for a revision
      * range; merges have no numstat and sum to zero, exactly as in a plain
-     * listing.
+     * listing. The directories above every listed path (both sides of a
+     * rename) are noted for {@see directoryAttributes()}.
+     *
+     * With -z the records are NUL-terminated: "@<header>", then per file
+     * "<added>\t<deleted>\t<path>" (the first one after a header starts with
+     * a newline), or for a rename "<added>\t<deleted>\t" followed by the old
+     * and the new path. Paths are verbatim, never quoted.
      *
      * @param  list<string>  $revisions
      * @return array<string, array{additions: int, deletions: int, date: string, parents: list<string>}>
      */
     private function listCommits(array $revisions): array
     {
-        $output = $this->git(['log', '--format=@%H %cI %P', '--numstat', ...$revisions, '--'])->output();
+        $output = $this->git(['log', '-z', '--format=@%H %cI %P', '--numstat', ...$revisions, '--'])->output();
         $commits = [];
         $current = null;
+        $renamePaths = 0;
 
-        foreach (explode("\n", str_replace("\r\n", "\n", $output)) as $line) {
-            if (str_starts_with($line, '@')) {
-                $parts = explode(' ', rtrim(substr($line, 1)));
-                $current = $parts[0];
-                $commits[$current] = ['additions' => 0, 'deletions' => 0, 'date' => $parts[1] ?? '', 'parents' => array_slice($parts, 2)];
+        foreach (explode("\0", $output) as $token) {
+            if ($renamePaths > 0) {
+                $renamePaths--;
+                $this->noteDirectories($token);
 
                 continue;
             }
 
-            $parts = preg_split('/\s+/', $line, 3) ?: [];
+            $token = ltrim($token, "\n");
 
-            if ($current !== null && count($parts) >= 2 && $parts[0] !== '-') {
-                $commits[$current]['additions'] += (int) $parts[0];
-                $commits[$current]['deletions'] += (int) $parts[1];
+            if ($token === '') {
+                continue;
+            }
+
+            if ($token[0] === '@') {
+                // Nothing but a separator can follow the header on its line.
+                [$header, $rest] = array_pad(explode("\n", $token, 2), 2, '');
+                $parts = explode(' ', rtrim(substr($header, 1)));
+                $current = $parts[0];
+                $commits[$current] = ['additions' => 0, 'deletions' => 0, 'date' => $parts[1] ?? '', 'parents' => array_slice($parts, 2)];
+                $token = ltrim($rest, "\n");
+
+                if ($token === '') {
+                    continue;
+                }
+            }
+
+            $parts = explode("\t", $token, 3);
+
+            if ($current === null || count($parts) < 3) {
+                throw new RuntimeException('Unable to collect version statistics: unexpected git log --numstat output');
+            }
+
+            [$added, $deleted, $path] = $parts;
+
+            if ($added !== '-') {
+                $commits[$current]['additions'] += (int) $added;
+                $commits[$current]['deletions'] += (int) $deleted;
+            }
+
+            if ($path === '') {
+                $renamePaths = 2;
+            } else {
+                $this->noteDirectories($path);
             }
         }
 

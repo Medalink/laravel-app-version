@@ -71,7 +71,7 @@ it('starts empty from a missing, unreadable or foreign file', function (?string 
 
 it('skips malformed commit entries and fields', function (): void {
     $path = statsCacheFile();
-    File::put($path, json_encode(['format' => StatsCache::FORMAT, 'context' => 'ctx', 'commits' => [
+    File::put($path, json_encode(['format' => StatsCache::FORMAT, 'context' => 'ctx', 'directories' => [], 'directory_attributes' => 'attrs', 'commits' => [
         statsCacheSha(1) => ['additions' => 1, 'deletions' => 1, 'commits' => 1, 'first_commit_at' => '2024-01-01T00:00:00+00:00'],
         'not-a-sha' => ['additions' => 1, 'deletions' => 1, 'commits' => 1, 'first_commit_at' => '2024-01-01T00:00:00+00:00'],
         statsCacheSha(2) => ['additions' => '1', 'deletions' => 1, 'commits' => 1],
@@ -118,6 +118,59 @@ it('offers the entries written for a run HEAD, the most history first', function
     expect($cache->candidates())->toBe([statsCacheSha(2), statsCacheSha(1)]);
 });
 
+it('forgets the commit entries it is given', function (): void {
+    $cache = StatsCache::load(statsCacheFile());
+    $cache->useContext('');
+    $cache->remember(statsCacheSha(1), 1, 1, 5, '2024-01-01T00:00:00+00:00');
+    $cache->remember(statsCacheSha(2), 1, 1, 9, '2024-01-01T00:00:00+00:00');
+    $cache->remember(statsCacheSha(3), 1, 1, 20);
+    $cache->forget([statsCacheSha(2), statsCacheSha(3), statsCacheSha(4)]);
+
+    expect($cache->commitHashes())->toBe([statsCacheSha(1)])
+        ->and($cache->candidates())->toBe([statsCacheSha(1)]);
+});
+
+it('keeps the directories and their attributes fingerprint with the commit entries', function (): void {
+    $path = statsCacheFile();
+    $cache = StatsCache::load($path);
+    $cache->useContext('ctx');
+    $cache->remember(statsCacheSha(1), 1, 1, 1, '2024-01-01T00:00:00+00:00');
+    $cache->rememberDirectories(['app', 'app/Http'], 'attrs');
+    $cache->save();
+
+    $loaded = StatsCache::load($path);
+    $loaded->useContext('ctx');
+
+    expect($loaded->directories())->toBe(['app', 'app/Http'])
+        ->and($loaded->directoryAttributes())->toBe('attrs')
+        ->and($loaded->candidates())->toBe([statsCacheSha(1)]);
+
+    $loaded->forgetCommits();
+
+    expect($loaded->directories())->toBe([])
+        ->and($loaded->directoryAttributes())->toBe('')
+        ->and($loaded->candidates())->toBe([]);
+
+    $other = StatsCache::load($path);
+    $other->useContext('another context');
+
+    expect($other->directories())->toBe([])
+        ->and($other->candidates())->toBe([]);
+});
+
+it('drops commit entries a file keeps without the directories they were checked against', function (): void {
+    $path = statsCacheFile();
+    File::put($path, json_encode(['format' => StatsCache::FORMAT, 'context' => 'ctx', 'commits' => [
+        statsCacheSha(1) => ['additions' => 1, 'deletions' => 1, 'commits' => 1, 'first_commit_at' => '2024-01-01T00:00:00+00:00'],
+    ]]));
+
+    $cache = StatsCache::load($path);
+    $cache->useContext('ctx');
+
+    expect($cache->candidates())->toBe([])
+        ->and($cache->sums(statsCacheSha(1)))->toBeNull();
+});
+
 it('keeps the most recently used commit entries', function (): void {
     $path = statsCacheFile();
     $commits = [];
@@ -126,7 +179,7 @@ it('keeps the most recently used commit entries', function (): void {
         $commits[statsCacheSha($n)] = ['additions' => $n, 'deletions' => 0, 'commits' => $n, 'used' => $n <= 10 ? 1 : 1000 + $n];
     }
 
-    File::put($path, json_encode(['format' => StatsCache::FORMAT, 'context' => 'ctx', 'commits' => $commits]));
+    File::put($path, json_encode(['format' => StatsCache::FORMAT, 'context' => 'ctx', 'directories' => [], 'directory_attributes' => 'attrs', 'commits' => $commits]));
     $cache = StatsCache::load($path);
     $cache->useContext('ctx');
     $cache->sums(statsCacheSha(1));

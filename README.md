@@ -143,27 +143,44 @@ which walks the whole history except `git describe` (fast with a
 commit-graph).
 
 Cached entries belong to a context: the Git version; the diff, log, attribute
-and i18n configuration and `core.bigFileThreshold`; the attributes files Git
-reads (the repository's `info/attributes` through the common directory, so
-linked worktrees are covered; the global file; the system file where Git 2.42
-or later names it; the work tree's top-level `.gitattributes` and every tracked
-one); the shallow and graft files; replace refs; and the environment variables
-that redirect them. Another context, a rewritten history or no cached ancestor
-reads the whole history once. With `--flat` the cache also keeps each earlier
-release's notes, keyed by the commits that bound it, the release-notes
-configuration and that context; the running version is always compiled. The
-output is byte-for-byte what the command writes without the cache. An
-untracked `.gitattributes` below the top level is not part of the context:
-delete the cache after adding one. The file is only a cache: delete it at any
-time; an unreadable one starts empty.
+and i18n configuration and `core.bigFileThreshold`; the contents of the
+attributes files Git reads (the repository's `info/attributes` through the
+common directory; the global file; the system file where Git 2.42 or later
+names it; the work tree's top-level `.gitattributes` and every tracked one, in
+the index and the work tree); the shallow and graft files; replace refs; and
+the environment variables that redirect them. Git looks a listed path's
+attributes up in the work tree's `.gitattributes` of every directory above
+it, tracked, untracked or ignored, so the cache also keeps each directory its
+histories list and the contents of the `.gitattributes` there; one that
+appears, changes or goes away discards the entries. The context names no path,
+so a deploy that checks every release out in a new linked worktree builds on
+the previous release's run. Another context, a rewritten history or no cached
+ancestor reads the whole history once. Attributes read from a tree
+(`attr.tree`, `GIT_ATTR_SOURCE`) move with that tree, so with either set the
+command collects everything without the cache. With `--flat` the cache also keeps each earlier release's notes,
+keyed by the commits that bound it, the release-notes configuration, that
+context and the code that compiles them (by class name and contents, so a
+release's own copy of `vendor/` reuses them); the running version is always
+compiled. The output is byte-for-byte what the command writes without the
+cache.
+
+The file is only a cache: delete it at any time; an unreadable one starts
+empty. An entry naming a commit the repository no longer has (a pruned branch
+deploy, a new clone under a kept cache, `gc` after a force-push) is dropped by
+the run that meets it, which builds on the other entries. Any other failure of
+the cached read is a cache miss in every mode: the command collects everything
+without the cache, and `--strict` or `--flat` holds that collection to its
+rules.
 
 `scripts/verify-stats-cache.php` replays a real repository's recent history
 (from a checkout of this package) and fails unless every cached run matches
-the uncached one:
+the uncached one. It also reports whether each cached run read only the new
+commits. `--worktree-per-commit` checks every commit out in a new linked
+worktree, as a deploy with one worktree per release does:
 
 ```bash
 php scripts/verify-stats-cache.php /path/to/app --commits=20 --ref=origin/main \
-    --config=/path/to/app/config/app-version.php --app-name=App
+    --config=/path/to/app/config/app-version.php --app-name=App --worktree-per-commit
 ```
 
 `--output` writes the metadata to that file instead of `json_path` (or

@@ -19,14 +19,22 @@ use Throwable;
  * of it and the roots in B..C) and, once read, the `git log --format=%H` of
  * the VERSION file at C. The entries are only valid for the Git version,
  * configuration, attributes, shallow and graft files and replace refs they
- * were computed under; a different context discards them.
+ * were computed under; a different context discards them. The context holds
+ * no paths, so every checkout of the repository (a linked worktree per
+ * release) shares the entries. The cache also keeps every directory (from the
+ * top level) above a path the entries' histories list, and a fingerprint of
+ * the work tree's .gitattributes in those directories: Git looks the
+ * attributes of each listed path up there, tracked or not, so another
+ * fingerprint discards the entries too. An entry naming a commit the
+ * repository no longer has is dropped by the run that finds it.
  *
  * VERSION contents: the VERSION file at a commit never changes, so its
  * contents are kept for the commits the kept listings name.
  *
  * Release payloads: with --flat, each earlier version's release-notes payload
- * keyed by the commits that bound it and the configuration that compiled it.
- * The running version is never cached.
+ * keyed by the commits that bound it and the configuration and code that
+ * compiled it (by class name and contents, not by where the code is
+ * installed). The running version is never cached.
  *
  * The file is a cache: an unreadable or foreign file starts empty, and it is
  * replaced atomically so a concurrent reader never sees half a file.
@@ -35,12 +43,18 @@ use Throwable;
  */
 class StatsCache
 {
-    public const int FORMAT = 1;
+    public const int FORMAT = 2;
 
     /** Most-recently used commit entries kept; boundaries are used every run. */
     public const int MAX_COMMITS = 256;
 
     private string $context = '';
+
+    /** @var list<string> directories (from the top level) above every path the entries' histories list */
+    private array $directories = [];
+
+    /** Fingerprint of the work tree's .gitattributes in those directories when the entries were written. */
+    private string $directoryAttributes = '';
 
     /** @var array<string, Entry> */
     private array $commits = [];
@@ -71,6 +85,16 @@ class StatsCache
         }
 
         $cache->context = is_string($data['context'] ?? null) ? $data['context'] : '';
+        $directories = $data['directories'] ?? null;
+
+        if (is_array($directories) && array_is_list($directories) && is_string($data['directory_attributes'] ?? null)
+            && array_filter($directories, static fn (mixed $directory): bool => ! is_string($directory)) === []) {
+            $cache->directories = $directories;
+            $cache->directoryAttributes = $data['directory_attributes'];
+        } else {
+            // Without them no entry can be checked against the attributes.
+            $data['commits'] = [];
+        }
 
         foreach (is_array($data['commits'] ?? null) ? $data['commits'] : [] as $sha => $entry) {
             if (self::isCommitHash((string) $sha) && is_array($entry)
@@ -125,9 +149,31 @@ class StatsCache
     {
         if ($context !== $this->context) {
             $this->context = $context;
-            $this->commits = [];
-            $this->versionContents = [];
+            $this->forgetCommits();
         }
+    }
+
+    /** @return list<string> */
+    public function directories(): array
+    {
+        return $this->directories;
+    }
+
+    public function directoryAttributes(): string
+    {
+        return $this->directoryAttributes;
+    }
+
+    /**
+     * The directories the entries' histories touch, and the fingerprint of
+     * the attributes files in them the entries were computed under.
+     *
+     * @param  list<string>  $directories
+     */
+    public function rememberDirectories(array $directories, string $attributes): void
+    {
+        $this->directories = array_values($directories);
+        $this->directoryAttributes = $attributes;
     }
 
     /**
@@ -202,10 +248,26 @@ class StatsCache
         $this->commits[$sha] = $entry;
     }
 
+    /** @return list<string> every commit with an entry */
+    public function commitHashes(): array
+    {
+        return array_map('strval', array_keys($this->commits));
+    }
+
+    /** @param list<string> $shas */
+    public function forget(array $shas): void
+    {
+        foreach ($shas as $sha) {
+            unset($this->commits[$sha]);
+        }
+    }
+
     public function forgetCommits(): void
     {
         $this->commits = [];
         $this->versionContents = [];
+        $this->directories = [];
+        $this->directoryAttributes = '';
     }
 
     /**
@@ -284,6 +346,8 @@ class StatsCache
         File::replace($this->path, json_encode([
             'format' => self::FORMAT,
             'context' => $this->context,
+            'directories' => $this->directories,
+            'directory_attributes' => $this->directoryAttributes,
             'commits' => (object) $commits,
             'version_contents' => (object) array_intersect_key($this->versionContents, $named),
             'releases' => (object) $this->releases,
