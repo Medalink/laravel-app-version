@@ -118,6 +118,9 @@ class ReleaseNotesCompiler
 
     private const string FIX_SIGNALS = '/\b(bug|bugs|crash|crashes|crashing|broken|breaks|breaking|regression|regressions|flaky|flap|flapping|leak|leaks|leaking|race|races|false|wrong|wrongly|incorrect|incorrectly|missing|error|errors|fail|fails|failed|failing|failure|failures|typo|typos|stale|no longer|never again|exception|exceptions|deadlock|deadlocks|timeout|timeouts|hang|hangs|hanging|500s?|mismatch|mismatched|invalid|unexpected|undefined|null pointer|off-by-one|duplicate|duplicated|duplicates|lying|misleading|glitch|glitches)\b/i';
 
+    /** @var array<string, mixed>|null {@see isVerb()} sets by section ('' = all), plus the configuration they came from */
+    private ?array $verbSets = null;
+
     /**
      * @param  list<string>  $subjects
      * @param  list<string>  $warnings
@@ -408,11 +411,11 @@ class ReleaseNotesCompiler
 
         $leading = $this->leadingVerb($parsed['text']);
 
-        if ($leading !== null && in_array($leading, $this->verbs(ReleaseNote::SECTION_NEW), true)) {
+        if ($leading !== null && $this->isVerb($leading, ReleaseNote::SECTION_NEW)) {
             return ReleaseNote::SECTION_NEW;
         }
 
-        if ($leading !== null && in_array($leading, $this->verbs(ReleaseNote::SECTION_FIXED), true)) {
+        if ($leading !== null && $this->isVerb($leading, ReleaseNote::SECTION_FIXED)) {
             return ReleaseNote::SECTION_FIXED;
         }
 
@@ -520,14 +523,12 @@ class ReleaseNotesCompiler
             return null;
         }
 
-        $known = $this->allVerbs();
-
-        if (in_array($lower, $known, true)) {
+        if ($this->isVerb($lower)) {
             return $word;
         }
 
         foreach (['un', 're'] as $prefix) {
-            if (strlen($lower) > strlen($prefix) + 2 && str_starts_with($lower, $prefix) && in_array(substr($lower, strlen($prefix)), $known, true)) {
+            if (strlen($lower) > strlen($prefix) + 2 && str_starts_with($lower, $prefix) && $this->isVerb(substr($lower, strlen($prefix)))) {
                 return $word;
             }
         }
@@ -539,12 +540,12 @@ class ReleaseNotesCompiler
     {
         $lower = strtolower($verb);
 
-        if (in_array($lower, $this->allVerbs(), true)) {
+        if ($this->isVerb($lower)) {
             return self::pastTense($lower);
         }
 
         foreach (['un', 're'] as $prefix) {
-            if (str_starts_with($lower, $prefix) && in_array(substr($lower, strlen($prefix)), $this->allVerbs(), true)) {
+            if (str_starts_with($lower, $prefix) && $this->isVerb(substr($lower, strlen($prefix)))) {
                 return $prefix.self::pastTense(substr($lower, strlen($prefix)));
             }
         }
@@ -563,7 +564,7 @@ class ReleaseNotesCompiler
         $lower = strtolower($verb);
 
         foreach (['un', 're'] as $prefix) {
-            if (! in_array($lower, $this->allVerbs(), true) && str_starts_with($lower, $prefix)) {
+            if (! $this->isVerb($lower) && str_starts_with($lower, $prefix)) {
                 return substr($lower, strlen($prefix));
             }
         }
@@ -607,6 +608,28 @@ class ReleaseNotesCompiler
             ...$this->verbs(ReleaseNote::SECTION_FIXED),
             ...$this->verbs(ReleaseNote::SECTION_IMPROVED),
         ]));
+    }
+
+    /**
+     * {@see verbs()} (or, without a section, {@see allVerbs()}) as a set. The
+     * lexicon is consulted for nearly every word of every subject, so it is
+     * built once per `section_prefixes` value instead of on every lookup.
+     */
+    protected function isVerb(string $word, ?string $section = null): bool
+    {
+        $configured = $this->config('section_prefixes', []);
+
+        if ($this->verbSets === null || $this->verbSets['configured'] !== $configured) {
+            $sets = ['configured' => $configured, '' => array_fill_keys($this->allVerbs(), true)];
+
+            foreach (ReleaseNote::SECTIONS as $name) {
+                $sets[$name] = array_fill_keys($this->verbs($name), true);
+            }
+
+            $this->verbSets = $sets;
+        }
+
+        return isset($this->verbSets[$section ?? ''][$word]);
     }
 
     protected function itemKey(string $sentence): string
