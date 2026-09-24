@@ -121,12 +121,34 @@ class ReleaseNotesCompiler
     /** @var array<string, mixed>|null {@see isVerb()} sets by section ('' = all), plus the configuration they came from */
     private ?array $verbSets = null;
 
+    /** @var array<string, mixed>|null {@see config()} values read during one {@see compile()} call */
+    private ?array $settings = null;
+
     /**
      * @param  list<string>  $subjects
      * @param  list<string>  $warnings
      * @return Compiled
      */
     public function compile(array $subjects, array $warnings = []): array
+    {
+        // Every word of every subject consults the configuration; read each
+        // key once per call rather than through the config repository.
+        $outer = $this->settings;
+        $this->settings ??= [];
+
+        try {
+            return $this->compileSubjects($subjects, $warnings);
+        } finally {
+            $this->settings = $outer;
+        }
+    }
+
+    /**
+     * @param  list<string>  $subjects
+     * @param  list<string>  $warnings
+     * @return Compiled
+     */
+    protected function compileSubjects(array $subjects, array $warnings): array
     {
         $sections = ReleaseNote::emptySections();
         $matchTexts = [];
@@ -714,6 +736,14 @@ class ReleaseNotesCompiler
 
     protected function config(string $key, mixed $default = null): mixed
     {
-        return config('app-version.release_notes.'.$key, $default);
+        if ($this->settings === null) {
+            return config('app-version.release_notes.'.$key, $default);
+        }
+
+        if (! array_key_exists($key, $this->settings)) {
+            $this->settings[$key] = config('app-version.release_notes.'.$key, $default);
+        }
+
+        return $this->settings[$key];
     }
 }

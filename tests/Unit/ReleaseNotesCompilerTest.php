@@ -207,6 +207,21 @@ it('adds configured section verbs on top of the built-in lexicon', function (): 
     expect($compiled['sections'][ReleaseNote::SECTION_NEW])->toBe(['Unveiled the new dashboard.', 'Added a widget.']);
 });
 
+it('reads the configuration afresh for every compile on the same instance', function (): void {
+    $compiler = app(ReleaseNotesCompiler::class);
+
+    expect($compiler->compile(['Unveil the dashboard'])['sections'][ReleaseNote::SECTION_IMPROVED])->toBe(['Unveil the dashboard.']);
+
+    config()->set('app-version.release_notes.section_prefixes', [ReleaseNote::SECTION_NEW => ['unveil']]);
+    config()->set('app-version.release_notes.voice', ReleaseNotesCompiler::VOICE_IMPERATIVE);
+
+    expect($compiler->compile(['Unveil the dashboard'])['sections'][ReleaseNote::SECTION_NEW])->toBe(['Unveil the dashboard.']);
+
+    config()->set('app-version.release_notes.voice', ReleaseNotesCompiler::VOICE_PAST);
+
+    expect($compiler->compile(['Unveil the dashboard'])['sections'][ReleaseNote::SECTION_NEW])->toBe(['Unveiled the dashboard.']);
+});
+
 it('keeps full sections while deriving capped summary sections', function (): void {
     config()->set('app-version.release_notes.limits.per_section', 2);
 
