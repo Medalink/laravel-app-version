@@ -7,9 +7,13 @@ it('merges VERSION file history with semver tags, tags winning, newest first', f
     $this->writeVersionJson('0.2.0');
 
     Process::fake([
-        'git log --format=%H -- VERSION' => Process::result(output: "file-020\nfile-010\n"),
-        'git show file-020:VERSION' => Process::result(output: "0.2.0\n"),
-        'git show file-010:VERSION' => Process::result(output: "0.1.0\n"),
+        'git log --format=%H -- VERSION' => Process::result(output: "file-020\nfile-010\nfile-gone\nfile-junk\n"),
+        'git cat-file --batch' => Process::result(output: implode('', [
+            "aaa020 blob 6\n0.2.0\n\n",
+            "aaa010 blob 5\n0.1.0\n",
+            "file-gone:VERSION missing\n",
+            "aaa999 blob 9\nnot semv\n\n",
+        ])),
         'git for-each-ref refs/tags*' => Process::result(output: implode("\n", [
             'v0.0.2 tagobj-002 commit-002',
             'v0.0.10 commit-0010 ',
@@ -28,6 +32,10 @@ it('merges VERSION file history with semver tags, tags winning, newest first', f
         ['version' => '0.0.10', 'commit' => 'commit-0010'],
         ['version' => '0.0.2', 'commit' => 'commit-002'],
     ]);
+
+    Process::assertRan(fn ($process): bool => $process->command === 'git cat-file --batch'
+        && $process->input === "file-020:VERSION\nfile-010:VERSION\nfile-gone:VERSION\nfile-junk:VERSION\n");
+    Process::assertNotRan(fn ($process): bool => str_starts_with((string) $process->command, 'git show'));
 });
 
 it('reads committer dates for refs', function (): void {

@@ -109,12 +109,14 @@ class GitReleaseCommitSource implements ReleaseCommitSource
             throw new RuntimeException('Unable to read VERSION history from git.');
         }
 
+        $commits = array_values(array_filter(array_map('trim', explode("\n", $result->output()))));
+        $contents = $this->versionFileContents($commits);
         $versions = [];
 
-        foreach (array_filter(array_map('trim', explode("\n", $result->output()))) as $commit) {
-            $version = $this->versionAtCommit($commit);
+        foreach ($commits as $commit) {
+            $version = $contents[$commit] ?? null;
 
-            if ($version === null || isset($versions[$version])) {
+            if (! SemanticVersion::isValid($version) || isset($versions[$version])) {
                 continue;
             }
 
@@ -122,6 +124,57 @@ class GitReleaseCommitSource implements ReleaseCommitSource
         }
 
         return $versions;
+    }
+
+    /**
+     * The trimmed VERSION file at each commit, read in one `git cat-file`
+     * batch rather than one `git show` per commit; null where the file is
+     * absent at that commit.
+     *
+     * @param  list<string>  $commits
+     * @return array<string, string|null>
+     */
+    protected function versionFileContents(array $commits): array
+    {
+        if ($commits === []) {
+            return [];
+        }
+
+        $path = AppVersion::versionFileRelativePath();
+        $result = Process::path(AppVersion::repositoryPath())
+            ->input(implode('', array_map(static fn (string $commit): string => "{$commit}:{$path}\n", $commits)))
+            ->run('git cat-file --batch');
+
+        if (! $result->successful()) {
+            throw new RuntimeException('Unable to read VERSION history from git.');
+        }
+
+        $output = $result->output();
+        $offset = 0;
+        $contents = [];
+
+        foreach ($commits as $commit) {
+            $end = strpos($output, "\n", $offset);
+
+            if ($end === false) {
+                break;
+            }
+
+            $header = substr($output, $offset, $end - $offset);
+            $offset = $end + 1;
+
+            if (preg_match('/^[0-9a-f]+ \S+ (\d+)$/', $header, $match) !== 1) {
+                $contents[$commit] = null;
+
+                continue;
+            }
+
+            $value = trim(substr($output, $offset, (int) $match[1]));
+            $contents[$commit] = $value !== '' ? $value : null;
+            $offset += (int) $match[1] + 1;
+        }
+
+        return $contents;
     }
 
     /**
@@ -159,13 +212,6 @@ class GitReleaseCommitSource implements ReleaseCommitSource
         }
 
         return $versions;
-    }
-
-    protected function versionAtCommit(string $commit): ?string
-    {
-        $version = $this->runTrimmed(sprintf('git show %s:%s', $commit, AppVersion::versionFileRelativePath()));
-
-        return SemanticVersion::isValid($version) ? $version : null;
     }
 
     protected function runTrimmed(string $command): ?string
