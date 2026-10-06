@@ -308,7 +308,7 @@ class ReleaseNotesCompiler
         $featureGroups = $this->changeGroups($items, $matchTexts);
 
         return [
-            'headline' => $this->buildHeadline($sections, $featureGroups),
+            'headline' => $this->buildHeadline($sections, $featureGroups, ranked: true),
             'summary' => $this->buildChangeSummary($featureGroups),
             'sections' => $sections,
             'summary_sections' => $this->summarySections($sections),
@@ -929,12 +929,13 @@ class ReleaseNotesCompiler
      *
      * @param  Sections  $sections
      * @param  list<FeatureGroup>  $featureGroups
+     * @param  bool  $ranked  the groups are already in reading order ({@see changeGroups()}), so the headline names the areas the modal leads with
      */
-    protected function buildHeadline(array $sections, array $featureGroups = []): string
+    protected function buildHeadline(array $sections, array $featureGroups = [], bool $ranked = false): string
     {
         $areas = collect($featureGroups)
             ->reject(static fn (array $group): bool => $group['title'] === self::GENERAL_GROUP_TITLE)
-            ->sortByDesc('item_count')
+            ->when(! $ranked, static fn ($groups) => $groups->sortByDesc('item_count'))
             ->take((int) $this->config('limits.headline_areas', 3))
             ->map(static fn (array $group): string => (string) ($group['short'] ?? $group['title']))
             ->values()

@@ -9,6 +9,7 @@ use Medalink\AppVersion\AppVersion;
 use Medalink\AppVersion\Contracts\ReleaseCommitSource;
 use Medalink\AppVersion\Git\GitReleaseCommitSource;
 use Medalink\AppVersion\Git\IncrementalHistory;
+use Medalink\AppVersion\Git\PullRequestHistory;
 use Medalink\AppVersion\Models\ReleaseNote;
 use Medalink\AppVersion\ReleaseNotes\ReleaseNotesCompiler;
 use Medalink\AppVersion\ReleaseNotes\ReleaseNotesPublisher;
@@ -364,7 +365,7 @@ class GenerateVersionCommand extends Command
     {
         $code = [];
 
-        foreach ([$publisher, app(ReleaseNotesCompiler::class), app(ReleaseCommitSource::class), ReleaseNote::class, SemanticVersion::class, AppVersion::class] as $class) {
+        foreach ([$publisher, app(ReleaseNotesCompiler::class), app(ReleaseCommitSource::class), PullRequestHistory::class, ReleaseNote::class, SemanticVersion::class, AppVersion::class] as $class) {
             for ($reflection = new ReflectionClass($class); $reflection !== false; $reflection = $reflection->getParentClass()) {
                 $file = $reflection->getFileName();
 
