@@ -117,3 +117,18 @@ it('adds the running version at HEAD when neither file history nor tags know it'
         ['version' => '0.2.0', 'commit' => 'c020'],
     ]);
 });
+
+it('reads the pull requests of a range from one topo-ordered git log', function (): void {
+    Process::fake([
+        'git log --topo-order *' => Process::result(output: implode('', [
+            "pr1\x1fbase c1\x1fMerge pull request #1 from org/feat/widget\x1fWidget dashboard\x1e\n",
+            "c1\x1fbase\x1fAdd widget\x1f\x1e\n",
+        ])),
+    ]);
+
+    expect((new GitReleaseCommitSource)->changes('base', 'pr1'))->toBe([
+        ['title' => 'Widget dashboard', 'branch' => 'feat/widget', 'number' => 1, 'details' => ['Add widget']],
+    ]);
+
+    Process::assertRan(fn ($process): bool => $process->command === 'git log --topo-order --format=%H%x1f%P%x1f%s%x1f%b%x1e base..pr1');
+});

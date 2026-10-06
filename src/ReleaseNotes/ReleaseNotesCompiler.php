@@ -4,6 +4,7 @@ namespace Medalink\AppVersion\ReleaseNotes;
 
 use Illuminate\Support\Arr;
 use Illuminate\Support\Str;
+use Medalink\AppVersion\Contracts\ReleaseChangeSource;
 use Medalink\AppVersion\Models\ReleaseNote;
 
 /**
@@ -15,10 +16,18 @@ use Medalink\AppVersion\Models\ReleaseNote;
  * then fix-signal keywords), rewrite into the configured voice, de-duplicate,
  * then group by feature area against both the raw and rewritten text.
  *
+ * {@see compileChanges()} runs the same pipeline over pull requests instead
+ * of commits: the branch prefix types each one, pull requests that share a
+ * rollup key (a plan number, say) become one change, and every feature area
+ * keeps its changes ranked so a reader sees the few that matter first.
+ *
  * @phpstan-type Sections array{new: list<string>, improved: list<string>, fixed: list<string>}
- * @phpstan-type FeatureGroup array{title: string, summary: string, sections: Sections, item_count: int}
+ * @phpstan-type RolledChange array{text: string, section: string, details: list<string>, commits: int, refs: list<int>}
+ * @phpstan-type FeatureGroup array{title: string, short?: string, summary: string, sections: Sections, item_count: int, commit_count?: int, changes?: list<RolledChange>}
  * @phpstan-type Compiled array{headline: string, summary: string, sections: Sections, summary_sections: Sections, feature_groups: list<FeatureGroup>, item_count: int, generation_mode: string, generation_warnings: list<string>}
  * @phpstan-type Parsed array{text: string, raw: string, type: string|null, scope: string|null, breaking: bool}
+ *
+ * @phpstan-import-type Change from ReleaseChangeSource
  */
 class ReleaseNotesCompiler
 {
@@ -90,7 +99,7 @@ class ReleaseNotesCompiler
     /** @var array<string, string> irregular or double-consonant past tenses */
     private const array PAST_TENSE_EXCEPTIONS = [
         'make' => 'made', 'keep' => 'kept', 'put' => 'put', 'send' => 'sent',
-        'give' => 'gave', 'show' => 'showed', 'hide' => 'hid', 'build' => 'built',
+        'give' => 'gave', 'show' => 'showed', 'hide' => 'hid', 'build' => 'built', 'rebuild' => 'rebuilt', 'rerun' => 'reran', 'resend' => 'resent',
         'let' => 'let', 'set' => 'set', 'cut' => 'cut', 'split' => 'split',
         'bring' => 'brought', 'write' => 'wrote', 'rewrite' => 'rewrote', 'read' => 'read',
         'run' => 'ran', 'get' => 'got', 'teach' => 'taught', 'catch' => 'caught',
@@ -195,6 +204,281 @@ class ReleaseNotesCompiler
     }
 
     /**
+     * Compile pull requests ({@see ReleaseChangeSource})
+     * rather than commit subjects. `sections` lists one sentence per change;
+     * each feature group also carries its `changes`, best first, which
+     * {@see ReleaseNote::highlights()} reads.
+     *
+     * @param  list<Change>  $changes
+     * @param  list<string>  $warnings
+     * @return Compiled
+     */
+    public function compileChanges(array $changes, array $warnings = []): array
+    {
+        $outer = $this->settings;
+        $this->settings ??= [];
+
+        try {
+            return $this->compileChangeSets($changes, $warnings);
+        } finally {
+            $this->settings = $outer;
+        }
+    }
+
+    /**
+     * @param  list<Change>  $changes
+     * @param  list<string>  $warnings
+     * @return Compiled
+     */
+    protected function compileChangeSets(array $changes, array $warnings): array
+    {
+        $rolled = [];
+
+        foreach ($changes as $change) {
+            if ($this->matchesAny((array) $this->config('ignore_branches', []), $change['branch'])) {
+                continue;
+            }
+
+            $parsed = $this->parse($change['title']);
+
+            if ($parsed === null) {
+                continue;
+            }
+
+            $section = $this->branchSection($change['branch']) ?? $this->classify($parsed);
+            $sentence = $this->render($parsed, $section);
+            $key = $this->rollupKey($change) ?? 'item:'.$this->itemKey($sentence);
+
+            $rolled[$key][] = [
+                'sentence' => $sentence,
+                'raw' => $parsed['raw'],
+                'branch' => $change['branch'],
+                'section' => $section,
+                'commits' => max(count($change['details']), 1),
+                'number' => $change['number'],
+            ];
+        }
+
+        $items = [];
+        $matchTexts = [];
+        $seen = [];
+
+        foreach ($rolled as $members) {
+            // A change reads as its biggest new feature, else its biggest
+            // improvement, else its biggest fix; the rest become its details.
+            usort($members, fn (array $left, array $right): int => [$this->sectionRank($left['section']), $right['commits']]
+                <=> [$this->sectionRank($right['section']), $left['commits']]);
+            $lead = $members[0];
+            $textKey = $this->itemKey($lead['sentence']);
+
+            if (isset($seen[$textKey])) {
+                continue;
+            }
+
+            $seen[$textKey] = true;
+            $items[] = [
+                'text' => $lead['sentence'],
+                'section' => $lead['section'],
+                'details' => array_values(array_unique(array_filter(
+                    array_column(array_slice($members, 1), 'sentence'),
+                    static fn (string $sentence): bool => $sentence !== $lead['sentence'],
+                ))),
+                'commits' => array_sum(array_column($members, 'commits')),
+                'refs' => array_values(array_filter(array_column($members, 'number'), is_int(...))),
+            ];
+            $matchTexts[$lead['sentence']] = [
+                array_values(array_filter([$lead['sentence'], $lead['raw'], $lead['branch']])),
+                array_values(array_filter([
+                    ...array_column(array_slice($members, 1), 'raw'),
+                    ...array_column(array_slice($members, 1), 'branch'),
+                ])),
+            ];
+        }
+
+        if ($items === []) {
+            return $this->fallback($warnings);
+        }
+
+        $sections = ReleaseNote::emptySections();
+
+        foreach ($items as $item) {
+            $sections[$item['section']][] = $item['text'];
+        }
+
+        $featureGroups = $this->changeGroups($items, $matchTexts);
+
+        return [
+            'headline' => $this->buildHeadline($sections, $featureGroups),
+            'summary' => $this->buildChangeSummary($featureGroups),
+            'sections' => $sections,
+            'summary_sections' => $this->summarySections($sections),
+            'feature_groups' => $featureGroups,
+            'item_count' => count($items),
+            'generation_mode' => ReleaseNote::GENERATION_MODE_PARSED,
+            'generation_warnings' => array_values($warnings),
+        ];
+    }
+
+    /**
+     * Feature groups of rolled-up changes, busiest area first and the general
+     * bucket last. Inside a group changes are ranked by size, new features
+     * counting double, and `sections` follows that order.
+     *
+     * @param  list<RolledChange>  $items
+     * @param  array<string, array{0: list<string>, 1: list<string>}>  $matchTexts  change text => [the lead's text, raw title and branch; the other members']
+     * @return list<FeatureGroup>
+     */
+    protected function changeGroups(array $items, array $matchTexts): array
+    {
+        $groups = array_map(static fn (array $group): array => $group + ['changes' => []], $this->configuredGroups());
+
+        foreach ($items as $item) {
+            [$lead, $members] = $matchTexts[$item['text']] ?? [[$item['text']], []];
+
+            // A change belongs where its lead says; the members it rolled up
+            // only place it when the lead names no area at all.
+            $title = $this->featureGroupTitleFor($lead, $groups)
+                ?? ($members !== [] ? $this->featureGroupTitleFor($members, $groups) : null)
+                ?? self::GENERAL_GROUP_TITLE;
+            $groups[$title]['changes'][] = $item;
+        }
+
+        $score = static fn (array $change): int => $change['commits'] * ($change['section'] === ReleaseNote::SECTION_NEW ? 2 : 1);
+
+        return collect($groups)
+            ->filter(static fn (array $group): bool => $group['changes'] !== [])
+            ->map(static function (array $group) use ($score): array {
+                usort($group['changes'], static fn (array $left, array $right): int => $score($right) <=> $score($left));
+                unset($group['patterns']);
+
+                foreach ($group['changes'] as $change) {
+                    $group['sections'][$change['section']][] = $change['text'];
+                }
+
+                $group['item_count'] = count($group['changes']);
+                $group['commit_count'] = array_sum(array_column($group['changes'], 'commits'));
+
+                return $group;
+            })
+            ->sortBy(static fn (array $group): array => [
+                $group['title'] === self::GENERAL_GROUP_TITLE ? 1 : 0,
+                -array_sum(array_map($score, $group['changes'])),
+            ])
+            ->values()
+            ->all();
+    }
+
+    /**
+     * "7 major updates, plus 284 smaller improvements and fixes": one major
+     * update per feature area the update modal lists, the smaller ones being
+     * every change it does not show as a highlight.
+     *
+     * @param  list<FeatureGroup>  $featureGroups
+     */
+    protected function buildChangeSummary(array $featureGroups): string
+    {
+        $shown = array_slice($featureGroups, 0, max((int) $this->config('limits.modal_groups', 7), 1));
+        $areas = count($shown);
+        $perGroup = max((int) $this->config('limits.highlights_per_group', 2), 1);
+        $highlighted = array_sum(array_map(static fn (array $group): int => min($group['item_count'], $perGroup), $shown));
+        $smaller = array_sum(array_column($featureGroups, 'item_count')) - $highlighted;
+
+        $summary = sprintf('This release brings %s major %s', number_format($areas), $areas === 1 ? 'update' : 'updates');
+
+        return $smaller > 0
+            ? $summary.sprintf(', plus %s smaller %s.', number_format($smaller), $smaller === 1 ? 'improvement or fix' : 'improvements and fixes')
+            : $summary.'.';
+    }
+
+    /**
+     * The configured feature groups keyed by title with the general bucket
+     * appended, each ready for items to be added.
+     *
+     * @return array<string, array{title: string, short: string, summary: string, patterns: mixed, sections: Sections}>
+     */
+    protected function configuredGroups(): array
+    {
+        $groups = [];
+
+        foreach ((array) $this->config('feature_groups', []) as $group) {
+            if (! is_array($group) || ! isset($group['title'])) {
+                continue;
+            }
+
+            $groups[(string) $group['title']] = [
+                'title' => (string) $group['title'],
+                'short' => (string) ($group['short'] ?? $group['title']),
+                'summary' => (string) ($group['summary'] ?? ''),
+                'patterns' => $group['patterns'] ?? [],
+                'sections' => ReleaseNote::emptySections(),
+            ];
+        }
+
+        $groups[self::GENERAL_GROUP_TITLE] ??= [
+            'title' => self::GENERAL_GROUP_TITLE,
+            'short' => self::GENERAL_GROUP_TITLE,
+            'summary' => 'Additional changes, fixes, and polish.',
+            'patterns' => [],
+            'sections' => ReleaseNote::emptySections(),
+        ];
+
+        return $groups;
+    }
+
+    /**
+     * The section a branch prefix names (`feat/…` new, `fix/…` fixed), or
+     * null when no `branch_types` pattern matches.
+     */
+    protected function branchSection(?string $branch): ?string
+    {
+        foreach ((array) $this->config('branch_types', []) as $pattern => $section) {
+            if ($branch !== null && is_string($pattern) && preg_match($pattern, $branch) && in_array($section, ReleaseNote::SECTIONS, true)) {
+                return $section;
+            }
+        }
+
+        return null;
+    }
+
+    /**
+     * The first `rollup_keys` capture found in the title or the branch, so
+     * "Plan 137 phase 2" and `feat/137-…` land on one change.
+     *
+     * @param  Change  $change
+     */
+    protected function rollupKey(array $change): ?string
+    {
+        foreach ((array) $this->config('rollup_keys', []) as $pattern) {
+            foreach ([$change['title'], $change['branch']] as $text) {
+                if (is_string($pattern) && $text !== null && preg_match($pattern, $text, $match) && ($match[1] ?? '') !== '') {
+                    return 'key:'.strtolower(ltrim($match[1], '0') ?: '0');
+                }
+            }
+        }
+
+        return null;
+    }
+
+    protected function sectionRank(string $section): int
+    {
+        return (int) array_search($section, ReleaseNote::SECTIONS, true);
+    }
+
+    /**
+     * @param  array<mixed>  $patterns
+     */
+    protected function matchesAny(array $patterns, ?string $text): bool
+    {
+        foreach ($patterns as $pattern) {
+            if ($text !== null && is_string($pattern) && preg_match($pattern, $text)) {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    /**
      * @param  list<string>  $warnings
      * @return Compiled
      */
@@ -258,29 +542,7 @@ class ReleaseNotesCompiler
      */
     public function featureGroups(array $sections, array $matchTexts = []): array
     {
-        $groups = [];
-
-        foreach ((array) $this->config('feature_groups', []) as $group) {
-            if (! is_array($group) || ! isset($group['title'])) {
-                continue;
-            }
-
-            $groups[(string) $group['title']] = [
-                'title' => (string) $group['title'],
-                'short' => (string) ($group['short'] ?? $group['title']),
-                'summary' => (string) ($group['summary'] ?? ''),
-                'patterns' => $group['patterns'] ?? [],
-                'sections' => ReleaseNote::emptySections(),
-            ];
-        }
-
-        $groups[self::GENERAL_GROUP_TITLE] ??= [
-            'title' => self::GENERAL_GROUP_TITLE,
-            'short' => self::GENERAL_GROUP_TITLE,
-            'summary' => 'Additional changes, fixes, and polish.',
-            'patterns' => [],
-            'sections' => ReleaseNote::emptySections(),
-        ];
+        $groups = $this->configuredGroups();
 
         foreach (ReleaseNote::SECTIONS as $section) {
             foreach ($sections[$section] ?? [] as $item) {
@@ -495,9 +757,10 @@ class ReleaseNotesCompiler
             return $text;
         }
 
-        // "Prompt audit: native JSON schemas" is a titled noun phrase, not
-        // an instruction to prompt something.
-        if (preg_match('/^\S+ \S+:/', $text)) {
+        // "Prompt audit: native JSON schemas" and "Release readiness for the
+        // map: ..." are titled noun phrases, not instructions to prompt or
+        // release something.
+        if (preg_match('/^(?:\S+ ){1,5}\S+:\s/', $text)) {
             return $text;
         }
 

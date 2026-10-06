@@ -9,7 +9,7 @@ Git-derived application versions and commit-driven release notes for Laravel. Th
 - **`app:version:set 1.2.3`** bumps `VERSION` (and `APP_VERSION=` in env files when present), commits `chore: Bump version to 1.2.3`, tags `v1.2.3`, and regenerates the JSON.
 - **`app:version:install-hooks`** writes a managed block into `post-commit`, `post-merge`, `post-checkout`, and `post-rewrite` so the build number stays current locally. The block uses `php` from PATH and falls back to the absolute path of the interpreter that ran the installer, so commits from IDEs, GUI clients, or agent shells without `php` on PATH still refresh the metadata. Re-running upgrades the block; `--uninstall` removes it.
 - **`app:release-notes:publish`** compiles the commit subjects between the previous version boundary and HEAD into New / Improved / Fixed sections, capped summary sections, and feature groups, then upserts a `release_notes` row for the running version. `app:release-notes:backfill` previews or writes notes for older versions.
-- **The compiler** drops noise (merges, dependabot, tests, chores, WIP, bumps, agent commits), honours conventional prefixes (`feat:` / `fix:` / `perf:` / `refactor!:`), strips PR refs, ticket keys, gitmoji, and backticks, classifies by a built-in verb lexicon plus fix-signal keywords ("crash", "stale", "false", "flap", …), renders in past voice ("Pinned X and linked Y") or as written (`voice: imperative`), de-duplicates, flags breaking changes, and groups items by feature area against both the raw subject and the rewritten sentence.
+- **The compiler** drops noise (merges, dependabot, tests, chores, WIP, bumps, agent commits), honours conventional prefixes (`feat:` / `fix:` / `perf:` / `refactor!:`), strips PR refs, ticket keys, gitmoji, and backticks, classifies by a built-in verb lexicon plus fix-signal keywords ("crash", "stale", "false", "flap", …), renders in past voice ("Pinned X and linked Y") or as written (`voice: imperative`), de-duplicates, flags breaking changes, and groups items by feature area against both the raw subject and the rewritten sentence. With `release_notes.unit = pull_request` it works on merged pull requests instead and rolls them up into a few ranked areas (see [Pull requests instead of commits](#pull-requests-instead-of-commits)).
 - **`ReleaseNote`** (version-keyed, ULID ids) with `published()`, `latestPublished()`, `currentPublished()`, `newerThan($version)`, and `toFeedArray()`.
 - **`HasReleaseNoteReadState`** trait for your user model, backed by `release_note_reads`: `ensureReleaseNoteReadBootstrap()`, `markReleaseNotesPrompted()`, `markReleaseNotesRead()`, `clearReleaseNoteReadState()`.
 - **`ReleaseNotesFeed`** turns those into one array per user: current release, banner flag, unread count, the capped list for an update summary, and `dismiss()` / `markAsRead()` mutations.
@@ -223,6 +223,18 @@ For a version-history page use `app(ReleaseNotesArchive::class)`. The newest `re
     'expandedLimit' => 2,
 ]
 ```
+
+### Pull requests instead of commits
+
+When work lands as dozens of commits per change, commit-level notes inflate ("250 new features"). Set `release_notes.unit` to `pull_request` and every merged pull request becomes one item instead, titled by its merge body, with its commits folded in:
+
+- One `git log --topo-order` of the range is split in memory (`PullRequestHistory`). Pull requests merged into a release branch or a stack are listed on their own; the carrier keeps only the commits made on it directly. Commits made straight on the mainline stay single items.
+- `branch_types` types each pull request by branch prefix (`feat/` new, `fix/` and `security/` fixed, `perf/` improved) before the title's own prefix and verb; `ignore_branches` drops `docs/`, `test/`, `chore/`, `dependabot/` and the like.
+- `rollup_keys` (regexes with one capture group, tried on the title and branch) join related pull requests into one change, read as its biggest new feature with the others as details. `'/\bplan (\d+)\b/i'` joins every phase and follow-up of a plan.
+- Feature groups match a change's own title and branch first, then the members it rolled up. Groups come back busiest first, each with its `changes` ranked by size (new features counting double), and the summary reads "This release brings 7 major updates, plus 284 smaller improvements and fixes."
+- `ReleaseNote::highlights()` (also `highlights` on `toFeedArray()`) is the update-modal view: the first `limits.modal_groups` areas (default 7), each with its best `limits.highlights_per_group` changes (default 2) and a `more` count. It is empty for releases compiled from commits, so hosts can render either.
+
+Without a previous release to diff against, or when the pull request lookup fails, publishing falls back to commit subjects and records a warning.
 
 `ReleaseNote::SECTION_LABELS` maps the section keys to their display labels, and `AppVersion::commitSpanLabel()` renders "563 commits in 14 days" from the recorded first and running commit dates (`commitSpanDays()` for the number, also on `toArray()`).
 

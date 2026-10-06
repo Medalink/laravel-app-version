@@ -82,3 +82,34 @@ it('builds a digest without sections or feature groups and labels every section'
         ->and(array_keys(ReleaseNote::SECTION_LABELS))->toBe(ReleaseNote::SECTIONS)
         ->and(ReleaseNote::SECTION_LABELS[ReleaseNote::SECTION_IMPROVED])->toBe('Improved');
 });
+
+it('reads highlights from ranked feature groups, capped per group and per modal', function (): void {
+    config()->set('app-version.release_notes.limits.highlights_per_group', 1);
+    config()->set('app-version.release_notes.limits.modal_groups', 2);
+
+    $groups = collect(['Maps', 'Billing', 'Settings'])->map(fn (string $title): array => [
+        'title' => $title,
+        'summary' => '',
+        'sections' => ReleaseNote::emptySections(),
+        'item_count' => 2,
+        'changes' => [
+            ['text' => "{$title} one.", 'section' => ReleaseNote::SECTION_NEW, 'details' => [], 'commits' => 2, 'refs' => []],
+            ['text' => "{$title} two.", 'section' => ReleaseNote::SECTION_FIXED, 'details' => [], 'commits' => 1, 'refs' => []],
+        ],
+    ])->all();
+    $release = ReleaseNote::factory()->create(['version' => '2.0.0', 'feature_groups' => $groups]);
+
+    expect($release->highlights())->toBe([
+        ['title' => 'Maps', 'short' => 'Maps', 'items' => ['Maps one.'], 'more' => 1],
+        ['title' => 'Billing', 'short' => 'Billing', 'items' => ['Billing one.'], 'more' => 1],
+    ])->and($release->hiddenHighlightGroupCount())->toBe(1)
+        ->and($release->summaryItemCount())->toBe(2)
+        ->and($release->toFeedArray()['hiddenHighlightGroups'])->toBe(1);
+});
+
+it('has no highlights for a release compiled from commits', function (): void {
+    $release = ReleaseNote::factory()->create(['version' => '2.0.1']);
+
+    expect($release->highlights())->toBe([])
+        ->and($release->toFeedArray()['highlights'])->toBe([]);
+});
