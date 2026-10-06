@@ -113,3 +113,43 @@ it('has no highlights for a release compiled from commits', function (): void {
     expect($release->highlights())->toBe([])
         ->and($release->toFeedArray()['highlights'])->toBe([]);
 });
+
+it('lists every change of a pull request release with its area and security rating', function (): void {
+    $release = ReleaseNote::factory()->create([
+        'version' => '2.1.0',
+        'feature_groups' => [
+            ['title' => 'Operations', 'summary' => '', 'sections' => [], 'changes' => [
+                ['text' => 'Deploy rework.', 'section' => ReleaseNote::SECTION_NEW, 'details' => ['Faster swaps.'], 'commits' => 40, 'refs' => [681]],
+                ['text' => 'Redact credential prompts from logs.', 'section' => ReleaseNote::SECTION_FIXED, 'details' => [], 'commits' => 2, 'refs' => [702]],
+            ]],
+            ['title' => 'Security', 'summary' => '', 'sections' => [], 'changes' => [
+                ['text' => 'Bumped laravel/mcp (OAuth redirect advisory).', 'section' => ReleaseNote::SECTION_FIXED, 'details' => [], 'commits' => 1, 'refs' => [690]],
+            ]],
+        ],
+    ]);
+
+    expect($release->changes())->toHaveCount(3)
+        ->and($release->changes()[0])->toBe([
+            'area' => 'Operations', 'text' => 'Deploy rework.', 'section' => ReleaseNote::SECTION_NEW,
+            'details' => ['Faster swaps.'], 'commits' => 40, 'refs' => [681], 'security' => null,
+        ])
+        ->and(array_column($release->securityChanges(), 'text'))->toBe([
+            'Bumped laravel/mcp (OAuth redirect advisory).',
+            'Redact credential prompts from logs.',
+        ])
+        ->and(array_column($release->securityChanges(), 'security'))->toBe(['high', 'medium']);
+});
+
+it('turns the section lines of a commit release into changes without sizes', function (): void {
+    $release = ReleaseNote::factory()->create([
+        'version' => '2.0.1',
+        'feature_groups' => [['title' => 'Editor', 'summary' => '', 'sections' => [
+            ReleaseNote::SECTION_NEW => ['Added tabs.'],
+            ReleaseNote::SECTION_FIXED => ['Escaped user names to stop XSS.'],
+        ], 'item_count' => 2]],
+    ]);
+
+    expect(array_column($release->changes(), 'text'))->toBe(['Added tabs.', 'Escaped user names to stop XSS.'])
+        ->and(array_column($release->changes(), 'commits'))->toBe([null, null])
+        ->and(array_column($release->changes(), 'security'))->toBe([null, 'high']);
+});
