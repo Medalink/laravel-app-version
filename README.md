@@ -236,6 +236,12 @@ When work lands as dozens of commits per change, commit-level notes inflate ("25
 
 Without a previous release to diff against, or when the pull request lookup fails, publishing falls back to commit subjects and records a warning.
 
+### Every change, and the security fixes
+
+`ReleaseNote::changes()` lists every change of a release as one row: `area`, `text`, `section`, `details`, `commits`, `refs` and `security`. Pull request releases keep their commit counts and pull request numbers; commit releases get one row per section line, with `commits` null and no refs.
+
+`security` is the `SecurityClassifier` rating (`high`, `medium`, `low` or null), read from the stored text when the page is built, so releases published before the classifier existed get it too, with no republish. `ReleaseNote::securityChanges()` returns the rated rows, most severe first. Only fixed and improved changes count; new features never do. `high` names a published weakness (an advisory, a CVE, an attack class such as injection or XSS), `medium` covers hardening (secrets, credentials, encoding, confinement, ownership checks), and a fix in an area matching `areas` is `low`. Tune it with `release_notes.security`. Any key left out keeps `SecurityClassifier::DEFAULTS`.
+
 `ReleaseNote::SECTION_LABELS` maps the section keys to their display labels, and `AppVersion::commitSpanLabel()` renders "563 commits in 14 days" from the recorded first and running commit dates (`commitSpanDays()` for the number, also on `toArray()`). `AppVersion::buildSpanDays()` does the same for this build: whole days from the tag or `VERSION` change the build counts from (`buildStartedAt()`, written as `build_started_at`) to the running commit, null at an exact tag.
 
 ## Owning the schema
