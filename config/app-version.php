@@ -95,7 +95,34 @@ return [
         // subjects are merged in underneath unless they duplicate an entry.
         'custom_releases' => [],
 
-        // Commit subjects matching any pattern are dropped before parsing.
+        // What one release-notes item is: "commit" (every commit subject) or
+        // "pull_request" (every merged pull request, titled by its merge body,
+        // its commits folded in). Pull requests need the Git commit source and
+        // a previous release to diff against; otherwise commits are used.
+        'unit' => 'commit',
+
+        // Pull request mode: branch-name regex => section, checked before the
+        // title's own conventional type and leading verb.
+        'branch_types' => [
+            '/^(?:feat|feature)\b/i' => ReleaseNote::SECTION_NEW,
+            '/^(?:fix|bugfix|hotfix|security)\b/i' => ReleaseNote::SECTION_FIXED,
+            '/^(?:perf|refactor|style|improve|ui|ux)\b/i' => ReleaseNote::SECTION_IMPROVED,
+        ],
+
+        // Pull request mode: pull requests from matching branches are dropped.
+        'ignore_branches' => [
+            '/^(?:docs?|tests?|chore|ci|build)\b/i',
+            '/^dependabot\//i',
+        ],
+
+        // Pull request mode: regexes with one capture group, tried against the
+        // title and the branch. Pull requests capturing the same value become
+        // one change (e.g. '/\bplan (\d+)\b/i' joins the phases of a plan),
+        // read as its biggest member with the others as details.
+        'rollup_keys' => [],
+
+        // Commit subjects (and pull request titles) matching any pattern are
+        // dropped before parsing.
         'ignore_patterns' => [
             '/^\s*merge\b/i',
             '/\bdependabot\b/i',
@@ -155,6 +182,10 @@ return [
             // How many of the newest releases a version-history page renders
             // in full; everything older is a collapsed digest (ReleaseNotesArchive).
             'archive_expanded_releases' => 2,
+            // Pull request mode: the changes each feature area shows as its
+            // highlights, and how many areas the update modal lists.
+            'highlights_per_group' => 2,
+            'modal_groups' => 7,
         ],
 
         // Null headline/summary resolve to "{app.name} has been updated" and

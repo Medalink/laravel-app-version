@@ -6,6 +6,7 @@ use Illuminate\Support\Arr;
 use Illuminate\Support\Carbon;
 use Illuminate\Support\Facades\Log;
 use Medalink\AppVersion\AppVersion;
+use Medalink\AppVersion\Contracts\ReleaseChangeSource;
 use Medalink\AppVersion\Contracts\ReleaseCommitSource;
 use Medalink\AppVersion\Models\ReleaseNote;
 use Medalink\AppVersion\Support\SemanticVersion;
@@ -22,6 +23,12 @@ use Throwable;
  */
 class ReleaseNotesPublisher
 {
+    /** `release_notes.unit`: every commit subject is an item. */
+    public const string UNIT_COMMIT = 'commit';
+
+    /** `release_notes.unit`: every merged pull request is an item ({@see ReleaseChangeSource}). */
+    public const string UNIT_PULL_REQUEST = 'pull_request';
+
     public function __construct(
         protected ReleaseCommitSource $commitSource,
         protected ReleaseNotesCompiler $compiler,
@@ -68,8 +75,7 @@ class ReleaseNotesPublisher
         }
 
         $custom = $this->customReleasePayload($version);
-        $subjects = $this->collectSubjects($fromRef, $toRef, $version, $strict, $warnings);
-        $compiled = $this->compiler->compile($subjects, $warnings);
+        $compiled = $this->compileRange($fromRef, $toRef, $version, $strict, $warnings);
         $payload = $custom !== null ? $this->mergeCustomReleasePayload($custom, $compiled) : $compiled;
 
         return array_merge($payload, [
@@ -131,6 +137,37 @@ class ReleaseNotesPublisher
         $stored = AppVersion::releaseNoteModel()::forVersion($previousVersion)?->source_commit;
 
         return is_string($stored) && $stored !== '' ? $stored : null;
+    }
+
+    /**
+     * Pull requests when the unit asks for them and the source can list
+     * them; commit subjects otherwise, and whenever the pull request lookup
+     * fails or the range has no lower bound.
+     *
+     * @param  list<string>  $warnings
+     * @return Compiled
+     */
+    protected function compileRange(?string $fromRef, string $toRef, string $version, bool $strict, array &$warnings): array
+    {
+        if ($fromRef !== null
+            && config('app-version.release_notes.unit', self::UNIT_COMMIT) === self::UNIT_PULL_REQUEST
+            && $this->commitSource instanceof ReleaseChangeSource) {
+            try {
+                return $this->compiler->compileChanges($this->commitSource->changes($fromRef, $toRef), $warnings);
+            } catch (Throwable $e) {
+                if ($strict) {
+                    throw $e;
+                }
+
+                $warnings[] = 'Pull request lookup failed: '.$e->getMessage();
+                Log::warning('Release note pull request lookup failed', [
+                    'version' => $version,
+                    'error' => $e->getMessage(),
+                ]);
+            }
+        }
+
+        return $this->compiler->compile($this->collectSubjects($fromRef, $toRef, $version, $strict, $warnings), $warnings);
     }
 
     /**

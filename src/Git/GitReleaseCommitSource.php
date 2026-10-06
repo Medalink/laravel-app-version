@@ -7,6 +7,7 @@ use Closure;
 use Illuminate\Support\Carbon;
 use Illuminate\Support\Facades\Process;
 use Medalink\AppVersion\AppVersion;
+use Medalink\AppVersion\Contracts\ReleaseChangeSource;
 use Medalink\AppVersion\Contracts\ReleaseCommitSource;
 use Medalink\AppVersion\Support\SemanticVersion;
 use RuntimeException;
@@ -19,7 +20,7 @@ use Throwable;
  * explicit release point (and lets history be reconstructed retroactively
  * on repositories that never bumped VERSION).
  */
-class GitReleaseCommitSource implements ReleaseCommitSource
+class GitReleaseCommitSource implements ReleaseChangeSource, ReleaseCommitSource
 {
     /** @var list<array{version: string, commit: string}>|null */
     protected ?array $versionHistory = null;
@@ -121,6 +122,19 @@ class GitReleaseCommitSource implements ReleaseCommitSource
         }
 
         return array_values(array_filter(array_map('trim', explode("\n", $result->output()))));
+    }
+
+    public function changes(string $fromRef, string $toRef): array
+    {
+        $result = Process::path(AppVersion::repositoryPath())->run(
+            sprintf('git log --topo-order --format=%s %s..%s', PullRequestHistory::FORMAT, $fromRef, $toRef),
+        );
+
+        if (! $result->successful()) {
+            throw new RuntimeException('Unable to read git pull request history.');
+        }
+
+        return (new PullRequestHistory)->changes($result->output());
     }
 
     public function currentCommit(): ?string

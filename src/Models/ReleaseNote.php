@@ -190,9 +190,58 @@ class ReleaseNote extends Model
         ]];
     }
 
+    /**
+     * The update-modal view of a release compiled from pull requests: the
+     * first `modal_groups` feature areas, each with its best
+     * `highlights_per_group` changes and how many smaller ones it also holds.
+     * Empty for releases compiled from commits, which carry no ranked changes.
+     *
+     * @return list<array{title: string, short: string, items: list<string>, more: int}>
+     */
+    public function highlights(): array
+    {
+        $perGroup = max((int) config('app-version.release_notes.limits.highlights_per_group', 2), 1);
+
+        return array_map(static fn (array $group): array => [
+            'title' => (string) $group['title'],
+            'short' => (string) ($group['short'] ?? $group['title']),
+            'items' => array_map(static fn (array $change): string => (string) $change['text'], array_slice($group['changes'], 0, $perGroup)),
+            'more' => max(count($group['changes']) - $perGroup, 0),
+        ], array_slice($this->rankedGroups(), 0, max((int) config('app-version.release_notes.limits.modal_groups', 7), 1)));
+    }
+
+    /** Feature areas {@see highlights()} leaves out of the update modal. */
+    public function hiddenHighlightGroupCount(): int
+    {
+        return max(count($this->rankedGroups()) - count($this->highlights()), 0);
+    }
+
+    /**
+     * Highlight lines when the release has them, otherwise the capped
+     * summary sections: what one release costs the update modal's budget.
+     */
     public function summaryItemCount(): int
     {
+        $highlights = $this->highlights();
+
+        if ($highlights !== []) {
+            return array_sum(array_map(static fn (array $group): int => count($group['items']), $highlights));
+        }
+
         return array_sum(array_map('count', $this->summarySections()));
+    }
+
+    /**
+     * Feature groups that carry ranked `changes` (pull request releases).
+     *
+     * @return list<array{title: string, short?: string, changes: list<array{text: string}>}>
+     */
+    protected function rankedGroups(): array
+    {
+        return array_values(array_filter(
+            is_array($this->feature_groups) ? $this->feature_groups : [],
+            static fn (mixed $group): bool => is_array($group) && isset($group['title']) && is_array($group['changes'] ?? null) && $group['changes'] !== [],
+        ));
     }
 
     /**
@@ -200,7 +249,10 @@ class ReleaseNote extends Model
      * sections for banners and modals; full payloads carry every item plus
      * feature groups for an archive page.
      *
-     * @return array{version: string, previousVersion: string|null, headline: string, summary: string, publishedAt: string|null, sections: array{new: list<string>, improved: list<string>, fixed: list<string>}, featureGroups: list<array<string, mixed>>, itemCount: int, generationMode: string}
+     * `highlights` (and `hiddenHighlightGroups`, the areas it leaves out) is
+     * the rolled-up view of a pull request release; empty for commit ones.
+     *
+     * @return array{version: string, previousVersion: string|null, headline: string, summary: string, publishedAt: string|null, sections: array{new: list<string>, improved: list<string>, fixed: list<string>}, featureGroups: list<array<string, mixed>>, highlights: list<array{title: string, short: string, items: list<string>, more: int}>, hiddenHighlightGroups: int, itemCount: int, generationMode: string}
      */
     public function toFeedArray(bool $compact = true): array
     {
@@ -212,6 +264,8 @@ class ReleaseNote extends Model
             'publishedAt' => $this->published_at?->toIso8601String(),
             'sections' => $compact ? $this->summarySections() : $this->normalizedSections(),
             'featureGroups' => $compact ? [] : $this->featureGroups(),
+            'highlights' => $this->highlights(),
+            'hiddenHighlightGroups' => $this->hiddenHighlightGroupCount(),
             'itemCount' => (int) $this->item_count,
             'generationMode' => $this->generation_mode,
         ];

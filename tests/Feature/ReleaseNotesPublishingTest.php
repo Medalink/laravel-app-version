@@ -250,3 +250,46 @@ it('backfills an explicit version range', function (): void {
 
     expect(ReleaseNote::published()->pluck('version')->all())->toBe(['3.5.0', '3.4.0']);
 });
+
+it('publishes one item per pull request when the unit asks for pull requests', function (): void {
+    config()->set('app-version.release_notes.unit', 'pull_request');
+    $this->writeVersionJson('3.7.0');
+    $this->source->history = [
+        ['version' => '3.7.0', 'commit' => 'eee555'],
+        ['version' => '3.6.0', 'commit' => 'ccc333'],
+    ];
+    $this->source->subjects['ccc333..HEAD'] = ['Add widget', 'Fix widget test', 'Polish widget'];
+    $this->source->changes['ccc333..HEAD'] = [
+        ['title' => 'Widget dashboard', 'branch' => 'feat/widget', 'number' => 10, 'details' => ['Add widget', 'Fix widget test', 'Polish widget']],
+        ['title' => 'Release notes typo', 'branch' => 'docs/typo', 'number' => 11, 'details' => ['Fix typo']],
+    ];
+
+    $this->artisan('app:release-notes:publish')->assertSuccessful();
+
+    $release = ReleaseNote::forVersion('3.7.0');
+
+    expect($release?->item_count)->toBe(1)
+        ->and($release?->normalizedSections()[ReleaseNote::SECTION_NEW])->toBe(['Widget dashboard.'])
+        ->and($release?->highlights())->toBe([
+            ['title' => 'General Improvements', 'short' => 'General Improvements', 'items' => ['Widget dashboard.'], 'more' => 0],
+        ]);
+});
+
+it('falls back to commit subjects when the pull request lookup fails', function (): void {
+    config()->set('app-version.release_notes.unit', 'pull_request');
+    $this->writeVersionJson('3.7.1');
+    $this->source->history = [
+        ['version' => '3.7.1', 'commit' => 'fff666'],
+        ['version' => '3.7.0', 'commit' => 'eee555'],
+    ];
+    $this->source->subjects['eee555..HEAD'] = ['Add widget', 'Polish widget'];
+    $this->source->throwOnChanges = true;
+
+    $this->artisan('app:release-notes:publish')->assertSuccessful();
+
+    $release = ReleaseNote::forVersion('3.7.1');
+
+    expect($release?->item_count)->toBe(2)
+        ->and($release?->generation_warnings)->toBe(['Pull request lookup failed: simulated pull request lookup failure'])
+        ->and($release?->highlights())->toBe([]);
+});
