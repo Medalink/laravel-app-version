@@ -17,6 +17,22 @@ it('rates security fixes by what their text names', function (string $text, stri
     'permissions page' => ['Showed Impact Map permissions on the Admin Permissions page.', ReleaseNote::SECTION_IMPROVED, 'Impact Map', null],
     'excluded medium' => ['Escaped colour codes in the chart legend.', ReleaseNote::SECTION_FIXED, 'Dashboards', null],
     'ordinary fix' => ['Lock hosts in id order before bulk host updates.', ReleaseNote::SECTION_FIXED, 'Database', null],
+    'missing authorization' => ['Authorize HostDetail config reads and reject foreign config IDs.', ReleaseNote::SECTION_IMPROVED, 'Dashboards', SecurityClassifier::HIGH],
+    'authorize writes' => ['Authorize SiteIncidents site-monitor toggles.', ReleaseNote::SECTION_IMPROVED, 'Incidents', SecurityClassifier::HIGH],
+    'required permission' => ['Required manage_incidents and clamped days for Node Manager history backfill.', ReleaseNote::SECTION_FIXED, 'Alerting', SecurityClassifier::HIGH],
+    'login exposure' => ['Embed the stored UPS login only for ping_hosts users.', ReleaseNote::SECTION_FIXED, 'UPS', SecurityClassifier::HIGH],
+    'permission gate' => ['PCAP permissions: gate PcapContextTab on view_pcap.', ReleaseNote::SECTION_IMPROVED, 'PCAP', SecurityClassifier::MEDIUM],
+    'mutation gates' => ['Enforce service catalog and role mutation gates.', ReleaseNote::SECTION_FIXED, 'PCAP', SecurityClassifier::MEDIUM],
+    'supply chain' => ['Harden prod supply chain: APT, NodeSource, Go toolchain.', ReleaseNote::SECTION_FIXED, 'Operations', SecurityClassifier::MEDIUM],
+    'unprivileged' => ['Switched Terminus to unprivileged ICMP sockets.', ReleaseNote::SECTION_FIXED, 'Operations', SecurityClassifier::MEDIUM],
+    'production debug' => ['Published Blaze config and cast debug to bool to prevent production leak.', ReleaseNote::SECTION_FIXED, 'Interface', SecurityClassifier::MEDIUM],
+    'channel isolation' => ["Kept each ping session's broadcast on its own channel.", ReleaseNote::SECTION_FIXED, 'Incidents', SecurityClassifier::MEDIUM],
+    'release notes title' => ['Redesign release notes: version rail, one row per change, security fixes.', ReleaseNote::SECTION_IMPROVED, 'Release Notes', null],
+    'double-encoded text' => ['Resolved double-encoded ampersands in site names.', ReleaseNote::SECTION_FIXED, 'Incidents', null],
+    'credential fallback' => ['Fixed missing credential fallback in UPS battery replacement.', ReleaseNote::SECTION_FIXED, 'UPS', null],
+    'certificate correctness' => ["IRIS_TLS=provided serves the operator's certificate and never replaces it.", ReleaseNote::SECTION_FIXED, 'Operations', null],
+    'hardened plumbing' => ['Hardened Redis stream consumers.', ReleaseNote::SECTION_FIXED, 'Operations', null],
+    'permission name' => ['Fix Commands navigation: use correct permission name create_batch.', ReleaseNote::SECTION_FIXED, 'Interface', null],
 ]);
 
 it('reads details as well as the headline', function (): void {

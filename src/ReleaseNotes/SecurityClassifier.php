@@ -43,6 +43,13 @@ final class SecurityClassifier
             '/\bprivilege escalation\b/i',
             '/\bunauthori[sz]ed (?:access|users?|requests?)\b/i',
             '/\bleak(?:ed|s|ing)? (?:secrets?|credentials?|tokens?|passwords?|keys?)\b/i',
+            // A missing authorization check: "Authorize X writes and reject foreign host IDs".
+            '/\bIDOR\b/',
+            '/\bauthori[sz]e\w* (?:[\w-]+ ){0,3}(?:writes?|reads?|toggles?|actions?|access)\b/i',
+            '/\breject\w* foreign\b/i',
+            '/\b(?i:require[ds]?|requiring|check(?:ed|s)?) [a-z]+(?:_[a-z]+)+\b/',
+            '/\bonly (?:for|to) [a-z]+(?:_[a-z]+)+ users\b/',
+            '/\b(?:credentials?|logins?|passwords?|secrets?|tokens?) exposure\b/i',
         ],
 
         // Hardening: secrets, credentials, encoding, confinement, ownership.
@@ -54,24 +61,36 @@ final class SecurityClassifier
             '/\bpasswords?\b/i',
             '/\bsudoers?\b/i',
             '/\bOAuth\b/i',
-            '/\b(?:escape|escaped|escaping|encode[ds]?)\b/i',
+            '/@js\(\)|\bescap\w* (?:user|untrusted|input|output|html)\b/i',
             '/\bsanitiz/i',
             '/\bdecrypt/i',
             '/\bhardening\b/i',
+            '/\b(?:mutation|sign-in|auth\w*) gates?\b/i',
             '/\bprivileges?\b/i',
+            '/\bunprivileged\b|\bleast privilege\b/i',
+            '/\bsupply[- ]chain\b/i',
             '/\bCSP\b/',
             '/\bconfine[ds]?\b/i',
-            '/\brestrict\w* [\w ]*origins?\b/i',
+            '/\brestrict\w* [\w ]*(?:origins?|access)\b/i',
             '/\bmade [\w ]*private\b/i',
             '/\bverif(?:y|ied|ies) ownership\b/i',
             '/\bscoped? [\w ]*to the (?:calling|current|signed-in) user\b/i',
-            '/\bcertificates?\b/i',
+            '/\bpermissions?\b.*\bgat(?:e|es|ed|ing)\b|\bgat(?:e|es|ed|ing)\b.*\bpermissions?\b/i',
+            '/\bgat(?:e|es|ed) [\w ]*\b(?:on|behind) [a-z]+(?:_[a-z]+)+\b/',
+            '/\btenant[- ]safe\b/i',
+            '/\b(?:user )?registration\b.*\bproduction\b|\bdisabled? (?:user )?registration\b/i',
+            '/\bdebug\b.*\bproduction\b|\bproduction leak\b/i',
+            '/\b(?:session|idle) timeout\b|\bTMOUT\b/',
+            '/\bits own channel\b|\bchannel isolation\b|\bsession isolation\b/i',
         ],
 
         // Matches that only look like security: the change text alone decides.
         'exclude' => [
             '/\b(?:chart|layout|colou?r|font)s?\b/i',
             '/\bpermissions page\b/i',
+            '/\bpermission name\b/i',
+            '/\brelease[- ]notes?\b/i',
+            '/\bcredential fallback\b/i',
         ],
 
         // Feature areas whose fixes count as security even without a keyword.
