@@ -11,6 +11,7 @@ use Illuminate\Support\Collection;
 use Illuminate\Support\Facades\Cache;
 use Medalink\AppVersion\AppVersion;
 use Medalink\AppVersion\Database\Factories\ReleaseNoteFactory;
+use Medalink\AppVersion\ReleaseNotes\SecurityClassifier;
 use Medalink\AppVersion\Support\SemanticVersion;
 
 /**
@@ -188,6 +189,80 @@ class ReleaseNote extends Model
             'sections' => $this->normalizedSections(),
             'item_count' => $this->item_count,
         ]];
+    }
+
+    /**
+     * Every change in the release, one row each, in feature-area order and
+     * each area's own rank order. Pull request releases keep their commit
+     * counts and pull request numbers; commit releases get one row per
+     * section line with neither. `security` is the {@see SecurityClassifier}
+     * severity, read from the stored text, so older releases get it too.
+     *
+     * @return list<array{area: string, text: string, section: string, details: list<string>, commits: int|null, refs: list<int>, security: string|null}>
+     */
+    public function changes(): array
+    {
+        $classifier = SecurityClassifier::fromConfig();
+        $rows = [];
+
+        foreach ($this->featureGroups() as $group) {
+            $area = (string) ($group['title'] ?? '');
+            $changes = is_array($group['changes'] ?? null) && $group['changes'] !== []
+                ? $group['changes']
+                : self::changesFromSections((array) ($group['sections'] ?? []));
+
+            foreach ($changes as $change) {
+                if (! is_array($change) || ! is_string($change['text'] ?? null) || ! in_array($change['section'] ?? null, self::SECTIONS, true)) {
+                    continue;
+                }
+
+                $details = array_values(array_filter((array) ($change['details'] ?? []), is_string(...)));
+
+                $rows[] = [
+                    'area' => $area,
+                    'text' => $change['text'],
+                    'section' => $change['section'],
+                    'details' => $details,
+                    'commits' => isset($change['commits']) ? (int) $change['commits'] : null,
+                    'refs' => array_values(array_filter((array) ($change['refs'] ?? []), is_int(...))),
+                    'security' => $classifier->classify($change['text'], $details, $change['section'], $area),
+                ];
+            }
+        }
+
+        return $rows;
+    }
+
+    /**
+     * The release's security fixes, most severe first, then by size.
+     *
+     * @return list<array{area: string, text: string, section: string, details: list<string>, commits: int|null, refs: list<int>, security: string}>
+     */
+    public function securityChanges(): array
+    {
+        $rank = array_flip(SecurityClassifier::SEVERITIES);
+        $rows = array_values(array_filter($this->changes(), static fn (array $change): bool => $change['security'] !== null));
+
+        usort($rows, static fn (array $a, array $b): int => [$rank[$a['security']], -($a['commits'] ?? 0)] <=> [$rank[$b['security']], -($b['commits'] ?? 0)]);
+
+        return $rows;
+    }
+
+    /**
+     * @param  array<string, mixed>  $sections
+     * @return list<array{text: string, section: string}>
+     */
+    private static function changesFromSections(array $sections): array
+    {
+        $changes = [];
+
+        foreach (self::emptySections($sections) as $section => $items) {
+            foreach ((array) $items as $text) {
+                $changes[] = ['text' => $text, 'section' => $section];
+            }
+        }
+
+        return $changes;
     }
 
     /**
