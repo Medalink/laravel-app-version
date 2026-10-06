@@ -6,7 +6,7 @@ Git-derived application versions and commit-driven release notes for Laravel. Th
 
 - **`AppVersion`** reads `storage/app/version.json` (generated, never committed) and exposes `version()`, `build()`, `commit()`, `full()`, `stats()`, and `toArray()`. With no JSON present it falls back to the `VERSION` file with build `0` and commit `dev`.
 - **`app:version`** writes that JSON from the `VERSION` file, semver git tags, commit counts, and `--numstat` totals (last commit, this build, lifetime). `--stats-cache=<file>` makes repeat runs read only new history; `--output=<path>` writes somewhere other than the configured path.
-- **`app:version:set 1.2.3`** bumps `VERSION` (and `APP_VERSION=` in env files when present), commits `chore: Bump version to 1.2.3`, tags `v1.2.3`, and regenerates the JSON.
+- **`app:version:set 1.2.3`** bumps `VERSION` (and `APP_VERSION=` in env files when present), commits `chore: Bump version to 1.2.3`, tags `v1.2.3` (annotated, so Git signs it when `tag.gpgsign` is on), and regenerates the JSON.
 - **`app:version:install-hooks`** writes a managed block into `post-commit`, `post-merge`, `post-checkout`, and `post-rewrite` so the build number stays current locally. The block uses `php` from PATH and falls back to the absolute path of the interpreter that ran the installer, so commits from IDEs, GUI clients, or agent shells without `php` on PATH still refresh the metadata. Re-running upgrades the block; `--uninstall` removes it.
 - **`app:release-notes:publish`** compiles the commit subjects between the previous version boundary and HEAD into New / Improved / Fixed sections, capped summary sections, and feature groups, then upserts a `release_notes` row for the running version. `app:release-notes:backfill` previews or writes notes for older versions.
 - **The compiler** drops noise (merges, dependabot, tests, chores, WIP, bumps, agent commits), honours conventional prefixes (`feat:` / `fix:` / `perf:` / `refactor!:`), strips PR refs, ticket keys, gitmoji, and backticks, classifies by a built-in verb lexicon plus fix-signal keywords ("crash", "stale", "false", "flap", …), renders in past voice ("Pinned X and linked Y") or as written (`voice: imperative`), de-duplicates, flags breaking changes, and groups items by feature area against both the raw subject and the rewritten sentence. With `release_notes.unit = pull_request` it works on merged pull requests instead and rolls them up into a few ranked areas (see [Pull requests instead of commits](#pull-requests-instead-of-commits)).
@@ -236,7 +236,13 @@ When work lands as dozens of commits per change, commit-level notes inflate ("25
 
 Without a previous release to diff against, or when the pull request lookup fails, publishing falls back to commit subjects and records a warning.
 
-`ReleaseNote::SECTION_LABELS` maps the section keys to their display labels, and `AppVersion::commitSpanLabel()` renders "563 commits in 14 days" from the recorded first and running commit dates (`commitSpanDays()` for the number, also on `toArray()`).
+### Every change, and the security fixes
+
+`ReleaseNote::changes()` lists every change of a release as one row: `area`, `text`, `section`, `details`, `commits`, `refs` and `security`. Pull request releases keep their commit counts and pull request numbers; commit releases get one row per section line, with `commits` null and no refs.
+
+`security` is the `SecurityClassifier` rating (`high`, `medium`, `low` or null), read from the stored text when the page is built, so releases published before the classifier existed get it too, with no republish. `ReleaseNote::securityChanges()` returns the rated rows, most severe first. Only fixed and improved changes count; new features never do. `high` names a published weakness (an advisory, a CVE, an attack class such as injection or XSS), `medium` covers hardening (secrets, credentials, encoding, confinement, ownership checks), and a fix in an area matching `areas` is `low`. Tune it with `release_notes.security`. Any key left out keeps `SecurityClassifier::DEFAULTS`.
+
+`ReleaseNote::SECTION_LABELS` maps the section keys to their display labels, and `AppVersion::commitSpanLabel()` renders "563 commits in 14 days" from the recorded first and running commit dates (`commitSpanDays()` for the number, also on `toArray()`). `AppVersion::buildSpanDays()` does the same for this build: whole days from the tag or `VERSION` change the build counts from (`buildStartedAt()`, written as `build_started_at`) to the running commit, null at an exact tag.
 
 ## Owning the schema
 

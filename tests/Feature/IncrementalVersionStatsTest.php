@@ -353,7 +353,7 @@ it('reads only the commits since the last run, with no walk over the whole histo
     statsGit($ws, 'tag', '-a', 'v0.1.0', '-m', 'v0.1.0');
     statsCommit($ws, 'Grow the editor', ['app/editor.php' => statsLines(15, 'editor')]);
     $this->writeVersionFile('0.2.0');
-    statsCommit($ws, 'chore: Bump version to 0.2.0');
+    $bump = statsCommit($ws, 'chore: Bump version to 0.2.0');
     $deployed = statsCommit($ws, 'feat: add comments', ['app/comments.php' => statsLines(10, 'comment')]);
     statsCompare();
 
@@ -376,6 +376,7 @@ it('reads only the commits since the last run, with no walk over the whole histo
         'git describe --tags --match v[0-9]*.[0-9]*.[0-9]* --abbrev=0',
         "git log -z --format=@%H %cI %P --numstat {$head} ^{$deployed} --",
         'git diff-tree --stdin -r --name-only -- VERSION',
+        "git log -1 --format=%cI {$bump}",
         "git log --format=%s {$released}..HEAD",
     ])->and(statsFullWalks($commands))->toBe([])
         ->and(statsJson())->toMatchArray(['version' => '0.2.0', 'build' => 3])

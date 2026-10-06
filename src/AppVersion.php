@@ -107,20 +107,43 @@ class AppVersion
     }
 
     /**
+     * ISO-8601 committer date of the commit this build counts from (the tag
+     * or VERSION change); null at an exact tag or when unknown.
+     */
+    public static function buildStartedAt(): ?string
+    {
+        $value = self::data()['build_started_at'] ?? null;
+
+        return is_string($value) && $value !== '' ? $value : null;
+    }
+
+    /**
      * Whole days from the repository's first commit to the running commit,
      * at least 1; null when either date is unknown or unparseable.
      */
     public static function commitSpanDays(): ?int
     {
-        $first = self::firstCommitAt();
-        $last = self::committedAt();
+        return self::daysBetween(self::firstCommitAt(), self::committedAt());
+    }
 
-        if ($first === null || $last === null) {
+    /**
+     * Whole days the commits of this build span, from the commit it counts
+     * from to the running commit, at least 1; null when either date is
+     * unknown, unparseable, or the build is an exact tag.
+     */
+    public static function buildSpanDays(): ?int
+    {
+        return self::daysBetween(self::buildStartedAt(), self::committedAt());
+    }
+
+    private static function daysBetween(?string $from, ?string $to): ?int
+    {
+        if ($from === null || $to === null) {
             return null;
         }
 
         try {
-            $seconds = Carbon::parse($last)->getTimestamp() - Carbon::parse($first)->getTimestamp();
+            $seconds = Carbon::parse($to)->getTimestamp() - Carbon::parse($from)->getTimestamp();
         } catch (\Throwable) {
             return null;
         }
@@ -157,7 +180,7 @@ class AppVersion
     /**
      * Everything a client needs to render the version and its breakdown.
      *
-     * @return array{version: string, build: int, commit: string, full: string, committedAt: string|null, firstCommitAt: string|null, commitSpanDays: int|null, stats: array{total_commits: int, commit_additions: int, commit_deletions: int, build_additions: int, build_deletions: int, lifetime_additions: int, lifetime_deletions: int}}
+     * @return array{version: string, build: int, commit: string, full: string, committedAt: string|null, firstCommitAt: string|null, commitSpanDays: int|null, buildStartedAt: string|null, buildSpanDays: int|null, stats: array{total_commits: int, commit_additions: int, commit_deletions: int, build_additions: int, build_deletions: int, lifetime_additions: int, lifetime_deletions: int}}
      */
     public static function toArray(): array
     {
@@ -169,6 +192,8 @@ class AppVersion
             'committedAt' => self::committedAt(),
             'firstCommitAt' => self::firstCommitAt(),
             'commitSpanDays' => self::commitSpanDays(),
+            'buildStartedAt' => self::buildStartedAt(),
+            'buildSpanDays' => self::buildSpanDays(),
             'stats' => self::stats(),
         ];
     }

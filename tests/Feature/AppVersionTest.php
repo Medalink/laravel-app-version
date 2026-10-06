@@ -106,6 +106,22 @@ it('never reports a span shorter than one day and pluralises the label', functio
         ->and(AppVersion::commitSpanLabel())->toBe('1 commit in 1 day');
 });
 
+it('measures the build span from the commit the build counts from', function (): void {
+    $this->writeVersionJson('1.0.0', [
+        'committed_at' => '2026-09-02T13:00:00-05:00',
+        'build_started_at' => '2026-08-30T10:00:00-05:00',
+    ]);
+
+    expect(AppVersion::buildStartedAt())->toBe('2026-08-30T10:00:00-05:00')
+        ->and(AppVersion::buildSpanDays())->toBe(4)
+        ->and(AppVersion::toArray()['buildSpanDays'])->toBe(4);
+
+    $this->writeVersionJson('1.0.0', ['committed_at' => '2026-09-02T13:00:00-05:00']);
+
+    expect(AppVersion::buildSpanDays())->toBeNull()
+        ->and(AppVersion::toArray()['buildStartedAt'])->toBeNull();
+});
+
 it('omits the span when the commit dates are missing or unreadable', function (): void {
     $this->writeVersionJson('1.0.0', ['stats' => ['total_commits' => 42]]);
 

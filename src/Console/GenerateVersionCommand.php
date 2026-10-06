@@ -9,6 +9,7 @@ use Medalink\AppVersion\AppVersion;
 use Medalink\AppVersion\Contracts\ReleaseCommitSource;
 use Medalink\AppVersion\Git\GitReleaseCommitSource;
 use Medalink\AppVersion\Git\IncrementalHistory;
+use Medalink\AppVersion\Git\PullRequestHistory;
 use Medalink\AppVersion\Models\ReleaseNote;
 use Medalink\AppVersion\ReleaseNotes\ReleaseNotesCompiler;
 use Medalink\AppVersion\ReleaseNotes\ReleaseNotesPublisher;
@@ -149,7 +150,7 @@ class GenerateVersionCommand extends Command
      * the cached run must match byte for byte); with it, from what
      * {@see IncrementalHistory} read.
      *
-     * @return array{version: string, build: int, commit: string, full: string, committed_at: string|null, first_commit_at: string|null, stats: array<string, int>}
+     * @return array{version: string, build: int, commit: string, full: string, committed_at: string|null, first_commit_at: string|null, build_started_at: string|null, stats: array<string, int>}
      */
     protected function collect(string $fallbackVersion, ?IncrementalHistory $history): array
     {
@@ -173,6 +174,7 @@ class GenerateVersionCommand extends Command
             'full' => "{$version}.{$build}+{$commit}",
             'committed_at' => $history !== null ? $history->committedAt() : $this->runTrimmed('git log -1 --format=%cI HEAD'),
             'first_commit_at' => $history !== null ? $history->firstCommitAt() : $this->firstCommitAt(),
+            'build_started_at' => $build > 0 ? $this->buildStartedAt((string) $release['build_range']) : null,
             'stats' => $history !== null ? $history->stats($release['stats_range']) : $this->gatherStats($release['stats_range']),
         ];
     }
@@ -364,7 +366,7 @@ class GenerateVersionCommand extends Command
     {
         $code = [];
 
-        foreach ([$publisher, app(ReleaseNotesCompiler::class), app(ReleaseCommitSource::class), ReleaseNote::class, SemanticVersion::class, AppVersion::class] as $class) {
+        foreach ([$publisher, app(ReleaseNotesCompiler::class), app(ReleaseCommitSource::class), PullRequestHistory::class, ReleaseNote::class, SemanticVersion::class, AppVersion::class] as $class) {
             for ($reflection = new ReflectionClass($class); $reflection !== false; $reflection = $reflection->getParentClass()) {
                 $file = $reflection->getFileName();
 
@@ -448,6 +450,18 @@ class GenerateVersionCommand extends Command
         }
 
         return [$additions, $deletions];
+    }
+
+    /**
+     * Committer date of the commit a build range counts from (the tag or
+     * VERSION change before "..HEAD"). One `git log -1` either way, so the
+     * cached and uncached runs agree.
+     */
+    protected function buildStartedAt(string $range): ?string
+    {
+        $base = strstr($range, '..', true);
+
+        return is_string($base) && $base !== '' ? $this->runTrimmed("git log -1 --format=%cI {$base}") : null;
     }
 
     /**

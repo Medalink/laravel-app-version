@@ -2,6 +2,7 @@
 
 use Medalink\AppVersion\Models\ReleaseNote;
 use Medalink\AppVersion\Models\ReleaseNoteRead;
+use Medalink\AppVersion\ReleaseNotes\SecurityClassifier;
 
 return [
 
@@ -171,6 +172,14 @@ return [
         // Regex => full replacement sentence for subjects that deserve a
         // hand-written explanation.
         'detail_rewrites' => [],
+
+        // Which changes a release lists as security fixes (SecurityClassifier,
+        // read from the stored notes, so it covers every published release).
+        // Only `sections` count; `high` and `medium` patterns rate a change by
+        // its text and details; `exclude` drops medium matches on the text
+        // alone; a fix in an area matching `areas` counts as low. A key left
+        // out keeps SecurityClassifier::DEFAULTS.
+        'security' => SecurityClassifier::DEFAULTS,
 
         'limits' => [
             'per_section' => 3,

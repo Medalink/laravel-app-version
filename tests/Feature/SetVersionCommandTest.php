@@ -10,6 +10,7 @@ beforeEach(function (): void {
         'git add *' => Process::result(),
         'git commit *' => Process::result(),
         'git tag --points-at HEAD*' => Process::result(output: 'v9.8.7'),
+        'git tag -a *' => fn () => $this->tagResult ?? Process::result(),
         'git tag *' => Process::result(),
         'git describe *' => Process::result(output: 'v9.8.6'),
         'git rev-parse *' => Process::result(output: 'abc1234'),
@@ -42,7 +43,17 @@ it('commits the bump, stages only tracked files, and tags it', function (): void
         && ! preg_match('/git add .*["\']\.env["\']/', $process->command));
     Process::assertRan(fn (PendingProcess $process): bool => str_starts_with($process->command, 'git commit -m ')
         && str_contains($process->command, 'Bump version to 9.8.7'));
-    Process::assertRan(fn (PendingProcess $process): bool => $process->command === 'git tag v9.8.7');
+    Process::assertRan(fn (PendingProcess $process): bool => str_starts_with($process->command, 'git tag -a v9.8.7 -m ')
+        && str_contains($process->command, 'Release 9.8.7'));
+});
+
+it('shows why the tag could not be created', function (): void {
+    $this->tagResult = Process::result(errorOutput: "fatal: tag 'v9.8.7' already exists", exitCode: 128);
+
+    $this->artisan('app:version:set', ['version' => '9.8.7'])
+        ->expectsOutputToContain('Failed to create tag v9.8.7.')
+        ->expectsOutputToContain('already exists')
+        ->assertSuccessful();
 });
 
 it('skips committing with --no-commit and tagging with --no-tag', function (): void {
@@ -53,7 +64,7 @@ it('skips committing with --no-commit and tagging with --no-tag', function (): v
     $this->artisan('app:version:set', ['version' => '9.8.8', '--no-tag' => true])->assertSuccessful();
 
     Process::assertRan(fn (PendingProcess $process): bool => str_starts_with($process->command, 'git commit'));
-    Process::assertNotRan(fn (PendingProcess $process): bool => $process->command === 'git tag v9.8.8');
+    Process::assertNotRan(fn (PendingProcess $process): bool => str_starts_with($process->command, 'git tag -a v9.8.8'));
 });
 
 it('regenerates version.json after setting', function (): void {

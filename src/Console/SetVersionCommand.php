@@ -75,11 +75,14 @@ class SetVersionCommand extends Command
             return;
         }
 
+        // Annotated with a message, so it also works where tag.gpgsign is on
+        // (Git signs it then; a plain `git tag` there fails for want of one).
         $tag = SemanticVersion::tag($version);
-        $tagResult = Process::path($repository)->run("git tag {$tag}");
+        $tagResult = Process::path($repository)->run("git tag -a {$tag} -m ".escapeshellarg("Release {$version}"));
 
         if (! $tagResult->successful()) {
-            $this->warn("Failed to create tag {$tag}; it may already exist.");
+            $this->warn("Failed to create tag {$tag}.");
+            $this->line($tagResult->errorOutput());
 
             return;
         }
