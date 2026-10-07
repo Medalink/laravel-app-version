@@ -7,7 +7,7 @@ Git-derived application versions and commit-driven release notes for Laravel. Th
 - **`AppVersion`** reads `storage/app/version.json` (generated, never committed) and exposes `version()`, `build()`, `commit()`, `full()`, `stats()`, and `toArray()`. With no JSON present it falls back to the `VERSION` file with build `0` and commit `dev`.
 - **`app:version`** writes that JSON from the `VERSION` file, semver git tags, commit counts, and `--numstat` totals (last commit, this build, lifetime). `--stats-cache=<file>` makes repeat runs read only new history; `--output=<path>` writes somewhere other than the configured path.
 - **`app:version:set 1.2.3`** bumps `VERSION` (and `APP_VERSION=` in env files when present), commits `chore: Bump version to 1.2.3`, tags `v1.2.3` (annotated, so Git signs it when `tag.gpgsign` is on), and regenerates the JSON.
-- **`app:version:install-hooks`** writes a managed block into `post-commit`, `post-merge`, `post-checkout`, and `post-rewrite` so the build number stays current locally. The block uses `php` from PATH and falls back to the absolute path of the interpreter that ran the installer, so commits from IDEs, GUI clients, or agent shells without `php` on PATH still refresh the metadata. Re-running upgrades the block; `--uninstall` removes it.
+- **`app:version:install-hooks`** writes a managed block into `post-commit`, `post-merge`, `post-checkout`, and `post-rewrite` so the build number stays current locally. The block uses `php` from PATH and falls back to the absolute path of the interpreter that ran the installer, so commits from IDEs, GUI clients, or agent shells without `php` on PATH still refresh the metadata. The block also passes `--stats-cache=<git common dir>/app-version-stats.json` (see [Incremental generation](#incremental-generation)), so every linked worktree of a repository shares one cache and a hook run only reads history no earlier run has seen. Re-running upgrades the block, which is how an existing install picks this up; `--uninstall` removes it.
 - **`app:release-notes:publish`** compiles the commit subjects between the previous version boundary and HEAD into New / Improved / Fixed sections, capped summary sections, and feature groups, then upserts a `release_notes` row for the running version. `app:release-notes:backfill` previews or writes notes for older versions.
 - **The compiler** drops noise (merges, dependabot, tests, chores, WIP, bumps, agent commits), honours conventional prefixes (`feat:` / `fix:` / `perf:` / `refactor!:`), strips PR refs, ticket keys, gitmoji, and backticks, classifies by a built-in verb lexicon plus fix-signal keywords ("crash", "stale", "false", "flap", …), renders in past voice ("Pinned X and linked Y") or as written (`voice: imperative`), de-duplicates, flags breaking changes, and groups items by feature area against both the raw subject and the rewritten sentence. With `release_notes.unit = pull_request` it works on merged pull requests instead and rolls them up into a few ranked areas (see [Pull requests instead of commits](#pull-requests-instead-of-commits)).
 - **`ReleaseNote`** (version-keyed, ULID ids) with `published()`, `latestPublished()`, `currentPublished()`, `newerThan($version)`, and `toFeedArray()`.
@@ -165,7 +165,11 @@ compiled. The output is byte-for-byte what the command writes without the
 cache.
 
 The file is only a cache: delete it at any time; an unreadable one starts
-empty. An entry naming a commit the repository no longer has (a pruned branch
+empty. Processes may share it (the hooks of every worktree do): a save writes a
+temporary file beside it and renames it over, so a reader sees the old file or
+the new one whole, and of two overlapping saves the later one wins. An entry is
+keyed by the commit that names its history, so one written from another branch
+is either a valid base for this one or ignored, never a wrong number. An entry naming a commit the repository no longer has (a pruned branch
 deploy, a new clone under a kept cache, `gc` after a force-push) is dropped by
 the run that meets it, which builds on the other entries. Any other failure of
 the cached read is a cache miss in every mode: the command collects everything

@@ -3,6 +3,7 @@
 namespace Medalink\AppVersion\Support;
 
 use Illuminate\Support\Facades\File;
+use RuntimeException;
 use Throwable;
 
 /**
@@ -37,7 +38,11 @@ use Throwable;
  * installed). The running version is never cached.
  *
  * The file is a cache: an unreadable or foreign file starts empty, and it is
- * replaced atomically so a concurrent reader never sees half a file.
+ * replaced atomically so a concurrent reader never sees half a file. Several
+ * processes may share it (the git hooks of every worktree of a repository do):
+ * two that overlap each keep what they read, and the later write replaces the
+ * earlier whole, costing at worst a re-read of history, never a wrong number,
+ * because an entry is keyed by the commit that names its history.
  *
  * @phpstan-type Entry array{additions: int, deletions: int, commits: int, used: int, first_commit_at?: string, version_log?: array{path: string, commits: list<string>}}
  */
@@ -47,6 +52,9 @@ class StatsCache
 
     /** Most-recently used commit entries kept; boundaries are used every run. */
     public const int MAX_COMMITS = 256;
+
+    /** Tries at renaming the new file over the old one. */
+    private const int REPLACE_ATTEMPTS = 5;
 
     private string $context = '';
 
@@ -343,7 +351,7 @@ class StatsCache
         }
 
         File::ensureDirectoryExists(dirname($this->path));
-        File::replace($this->path, json_encode([
+        self::replaceAtomically($this->path, json_encode([
             'format' => self::FORMAT,
             'context' => $this->context,
             'directories' => $this->directories,
@@ -352,6 +360,38 @@ class StatsCache
             'version_contents' => (object) array_intersect_key($this->versionContents, $named),
             'releases' => (object) $this->releases,
         ], JSON_UNESCAPED_SLASHES | JSON_THROW_ON_ERROR)."\n");
+    }
+
+    /**
+     * Linked worktrees share one file, so processes write it at the same time.
+     * The contents go to a uniquely named file beside it and are renamed over
+     * it: a reader sees the old file or the new one, never half of either, and
+     * the last writer wins as a whole. Windows refuses the rename while a
+     * reader has the file open, so it is retried briefly; a write that still
+     * fails leaves no temporary file behind and throws (the cache is only a
+     * speed-up, the caller reports and carries on).
+     */
+    private static function replaceAtomically(string $path, string $contents): void
+    {
+        $temporary = $path.'.'.bin2hex(random_bytes(6)).'.tmp';
+
+        try {
+            if (file_put_contents($temporary, $contents) === false) {
+                throw new RuntimeException("Could not write {$temporary}.");
+            }
+
+            for ($attempt = 1; ! @rename($temporary, $path); $attempt++) {
+                if ($attempt === self::REPLACE_ATTEMPTS) {
+                    throw new RuntimeException("Could not replace {$path}.");
+                }
+
+                usleep(50_000 * $attempt);
+            }
+        } finally {
+            if (is_file($temporary)) {
+                @unlink($temporary);
+            }
+        }
     }
 
     private static function isVersionLog(mixed $log): bool

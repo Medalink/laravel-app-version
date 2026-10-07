@@ -21,6 +21,9 @@ class InstallHooksCommand extends Command
 
     private const string SHEBANG = '#!/usr/bin/env sh';
 
+    /** The statistics cache the hooks share, inside the common git directory. */
+    private const string STATS_CACHE_FILE = 'app-version-stats.json';
+
     protected $signature = 'app:version:install-hooks
         {--flat : Refresh the committed version-info.json snapshot after source changes}
         {--uninstall : Remove the managed block from every hook}';
@@ -58,6 +61,12 @@ class InstallHooksCommand extends Command
      * Hooks inherit the PATH of whatever committed (an IDE, a GUI client, an
      * agent shell), which often lacks php. Prefer php from PATH but fall back
      * to the interpreter that ran the installer, baked in as an absolute path.
+     *
+     * Every run keeps its statistics cache in the repository's common git
+     * directory, so all linked worktrees share one: a worktree's hook reads
+     * only the history no earlier run has seen, instead of every commit's
+     * numstat. Without a common directory (an old git, no repository) the run
+     * is uncached.
      */
     public static function managedBlock(?string $phpBinary = null, bool $flat = false): string
     {
@@ -67,7 +76,8 @@ class InstallHooksCommand extends Command
             self::BEGIN_MARKER,
             'if [ -f artisan ]; then',
             '    APP_VERSION_PHP="$(command -v php 2>/dev/null || printf \'%s\' \''.$fallback.'\')"',
-            '    "$APP_VERSION_PHP" artisan app:version'.($flat ? ' --flat' : '').' --no-interaction --quiet >/dev/null 2>&1'
+            '    APP_VERSION_GIT_DIR="$(git rev-parse --path-format=absolute --git-common-dir 2>/dev/null)"',
+            '    "$APP_VERSION_PHP" artisan app:version'.($flat ? ' --flat' : '').' ${APP_VERSION_GIT_DIR:+"--stats-cache=$APP_VERSION_GIT_DIR/'.self::STATS_CACHE_FILE.'"} --no-interaction --quiet >/dev/null 2>&1'
                 .($flat ? ' || printf "%s\n" "Version snapshot refresh failed; run php artisan app:version --flat before release." >&2' : ' || true'),
             'fi',
             self::END_MARKER,
