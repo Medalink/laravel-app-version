@@ -207,3 +207,36 @@ it('forgets releases a flat run did not use', function (): void {
     expect($loaded->release('old'))->toBeNull()
         ->and($loaded->release('kept'))->toBe(['version' => '1.0.0']);
 });
+
+it('replaces the file whole and leaves no temporary file beside it', function (): void {
+    $path = statsCacheFile();
+
+    foreach ([1, 2] as $n) {
+        $cache = StatsCache::load($path);
+        $cache->useContext('ctx');
+        $cache->remember(statsCacheSha($n), $n, $n, $n, '2024-01-01T00:00:00+00:00', 'VERSION', [statsCacheSha($n)]);
+        $cache->save();
+    }
+
+    $loaded = StatsCache::load($path);
+    $loaded->useContext('ctx');
+
+    expect($loaded->candidates())->toBe([statsCacheSha(2), statsCacheSha(1)])
+        ->and(glob($path.'.*'))->toBe([]);
+});
+
+it('leaves the cache and no temporary file behind when it cannot replace the file', function (): void {
+    $path = statsCacheFile();
+
+    // A directory is not a file the rename can replace.
+    mkdir($path);
+    $cache = StatsCache::load($path);
+    $cache->useContext('ctx');
+    $cache->remember(statsCacheSha(1), 1, 1, 1, '2024-01-01T00:00:00+00:00', 'VERSION', [statsCacheSha(1)]);
+
+    expect(fn () => $cache->save())->toThrow(RuntimeException::class)
+        ->and(glob($path.'.*'))->toBe([])
+        ->and(is_dir($path))->toBeTrue();
+
+    rmdir($path);
+});
