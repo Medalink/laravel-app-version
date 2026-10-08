@@ -37,6 +37,20 @@ it('types pull requests by branch prefix and drops ignored branches', function (
     ])->and($compiled['item_count'])->toBe(3);
 });
 
+it('lets a typed title outrank its branch prefix', function (): void {
+    $compiled = app(ReleaseNotesCompiler::class)->compileChanges([
+        change('perf: invoice list caches rebuild on demand', 'feat/invoice-cache'),
+        change('fix: invoice totals round half up', 'feat/invoice-rounding'),
+        change('Map clustering', 'feat/map-clustering'),
+    ]);
+
+    expect($compiled['sections'])->toBe([
+        ReleaseNote::SECTION_NEW => ['Map clustering.'],
+        ReleaseNote::SECTION_IMPROVED => ['Invoice list caches rebuild on demand.'],
+        ReleaseNote::SECTION_FIXED => ['Invoice totals round half up.'],
+    ]);
+});
+
 it('rolls pull requests sharing a key into their biggest new feature', function (): void {
     $compiled = app(ReleaseNotesCompiler::class)->compileChanges([
         change('Plan 120 phase 2: lightning on the map', 'feat/120-lightning', 4, 31),

@@ -245,7 +245,7 @@ class ReleaseNotesCompiler
                 continue;
             }
 
-            $section = $this->branchSection($change['branch']) ?? $this->classify($parsed);
+            $section = $this->typeSection($parsed['type']) ?? $this->branchSection($change['branch']) ?? $this->classify($parsed);
             $sentence = $this->render($parsed, $section);
             $key = $this->rollupKey($change) ?? 'item:'.$this->itemKey($sentence);
 
@@ -678,16 +678,26 @@ class ReleaseNotesCompiler
     }
 
     /**
-     * @param  Parsed  $parsed
+     * The section a conventional type names (`perf:` improved), or null for
+     * untyped titles. A pull request title's own type outranks its branch:
+     * `perf: …` from a `feat/…` branch is an improvement.
      */
-    protected function classify(array $parsed): string
+    protected function typeSection(?string $type): ?string
     {
-        $byType = match ($parsed['type']) {
+        return match ($type) {
             'feat', 'feature' => ReleaseNote::SECTION_NEW,
             'fix', 'bugfix', 'hotfix', 'revert' => ReleaseNote::SECTION_FIXED,
             'perf', 'refactor', 'style', 'improvement', 'improve', 'ui', 'ux' => ReleaseNote::SECTION_IMPROVED,
             default => null,
         };
+    }
+
+    /**
+     * @param  Parsed  $parsed
+     */
+    protected function classify(array $parsed): string
+    {
+        $byType = $this->typeSection($parsed['type']);
 
         if ($byType !== null) {
             return $byType;
