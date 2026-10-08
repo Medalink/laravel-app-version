@@ -43,6 +43,29 @@ it('appends to an existing hook and upgrades its block on re-run without duplica
         ->and(substr_count($contents, InstallHooksCommand::END_MARKER))->toBe(1);
 });
 
+it('puts the shebang back on a hook that lost its first line', function (): void {
+    // What removing another tool's block (shebang included) left behind.
+    $path = $this->hooks.DIRECTORY_SEPARATOR.'post-commit';
+    File::put($path, "\n\n".InstallHooksCommand::managedBlock()."\n");
+
+    $this->artisan('app:version:install-hooks')->assertSuccessful();
+
+    expect(File::get($path))->toBe("#!/usr/bin/env sh\n\n".InstallHooksCommand::managedBlock()."\n");
+});
+
+it('gives a hook it appends to a first line Git for Windows can run', function (): void {
+    $bare = $this->hooks.DIRECTORY_SEPARATOR.'post-commit';
+    $indented = $this->hooks.DIRECTORY_SEPARATOR.'post-merge';
+    File::put($bare, "echo custom\n");
+    File::put($indented, "\n#!/usr/bin/env bash\necho custom\n");
+
+    $this->artisan('app:version:install-hooks')->assertSuccessful();
+
+    expect(File::get($bare))->toStartWith("#!/usr/bin/env sh\n\necho custom\n\n".InstallHooksCommand::BEGIN_MARKER)
+        ->and(File::get($indented))->toStartWith("#!/usr/bin/env bash\necho custom\n\n".InstallHooksCommand::BEGIN_MARKER)
+        ->and(substr_count(File::get($indented), '#!'))->toBe(1);
+});
+
 it('removes only the managed block on uninstall and deletes hooks it fully owns', function (): void {
     $custom = $this->hooks.DIRECTORY_SEPARATOR.'post-commit';
     File::put($custom, "#!/bin/sh\necho custom\n");

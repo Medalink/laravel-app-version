@@ -98,16 +98,28 @@ class InstallHooksCommand extends Command
         $contents = (string) File::get($path);
 
         if ($this->hasManagedBlock($contents)) {
-            File::put($path, $this->replaceManagedBlock($contents, $block));
+            File::put($path, $this->withShebang($this->replaceManagedBlock($contents, $block)));
             $this->makeExecutable($path);
 
             return 'updated';
         }
 
-        File::put($path, rtrim($contents)."\n\n".$block."\n");
+        File::put($path, $this->withShebang(rtrim($contents)."\n\n".$block."\n"));
         $this->makeExecutable($path);
 
         return 'appended';
+    }
+
+    /**
+     * POSIX git runs a hook without a `#!` first line through sh; Git for
+     * Windows cannot run it at all ("Exec format error"). A hook another tool
+     * left without one, or with blank lines above it, is made runnable again.
+     */
+    protected function withShebang(string $contents): string
+    {
+        $contents = ltrim($contents);
+
+        return str_starts_with($contents, '#!') ? $contents : self::SHEBANG."\n\n".$contents;
     }
 
     protected function uninstall(string $path): string
