@@ -38,6 +38,8 @@ it('zero-fills stats missing from older version.json files', function (): void {
         'build_deletions' => 0,
         'lifetime_additions' => 0,
         'lifetime_deletions' => 0,
+        'lines' => 0,
+        'files' => 0,
     ]);
 });
 

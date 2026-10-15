@@ -19,6 +19,8 @@ function fakeFlatGit(): void
         'git rev-list --count *' => Process::result(output: '7'),
         'git log -1 --format=%cI HEAD' => Process::result(output: '2026-09-02T13:00:00-05:00'),
         'git log --format= --numstat*' => Process::result(output: "1000\t100\tapp/a.php\n"),
+        'git hash-object -t tree --stdin' => Process::result(output: 'empty-tree'),
+        'git diff --numstat *' => Process::result(output: "900\t0\tapp/a.php\n"),
         '*' => Process::result(output: ''),
     ]);
 }
