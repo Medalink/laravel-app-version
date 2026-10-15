@@ -30,6 +30,8 @@ function fakeGit(array $overrides = []): void
             'git log --format= --numstat v1.4.0..HEAD' => "60\t6\tapp/a.php\n",
             'git log --format= --numstat v1.3.0..HEAD' => "80\t8\tapp/a.php\n",
             'git log --format= --numstat' => "1000\t100\tapp/a.php\n",
+            'git hash-object -t tree --stdin' => "empty-tree\n",
+            'git diff --numstat empty-tree HEAD' => "900\t0\tapp/a.php\n-\t-\tpublic/logo.png\n12\t0\tdocs/release notes.md\n",
         ], $overrides),
     ));
 }
@@ -74,6 +76,8 @@ it('counts builds from the last VERSION change when there are no tags', function
         'build_deletions' => 5,
         'lifetime_additions' => 1000,
         'lifetime_deletions' => 100,
+        'lines' => 912,
+        'files' => 3,
     ]);
 
     Process::assertRan(fn (PendingProcess $process): bool => $process->command === 'git rev-list --count version-file-sha..HEAD');

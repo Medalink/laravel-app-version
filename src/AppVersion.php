@@ -18,7 +18,7 @@ class AppVersion
     /** @var array<string, mixed>|null */
     private static ?array $cached = null;
 
-    /** @var array{total_commits: int, commit_additions: int, commit_deletions: int, build_additions: int, build_deletions: int, lifetime_additions: int, lifetime_deletions: int} */
+    /** @var array{total_commits: int, commit_additions: int, commit_deletions: int, build_additions: int, build_deletions: int, lifetime_additions: int, lifetime_deletions: int, lines: int, files: int} */
     private const array DEFAULT_STATS = [
         'total_commits' => 0,
         'commit_additions' => 0,
@@ -27,6 +27,8 @@ class AppVersion
         'build_deletions' => 0,
         'lifetime_additions' => 0,
         'lifetime_deletions' => 0,
+        'lines' => 0,
+        'files' => 0,
     ];
 
     /**
@@ -168,7 +170,7 @@ class AppVersion
     }
 
     /**
-     * @return array{total_commits: int, commit_additions: int, commit_deletions: int, build_additions: int, build_deletions: int, lifetime_additions: int, lifetime_deletions: int}
+     * @return array{total_commits: int, commit_additions: int, commit_deletions: int, build_additions: int, build_deletions: int, lifetime_additions: int, lifetime_deletions: int, lines: int, files: int}
      */
     public static function stats(): array
     {
@@ -180,7 +182,7 @@ class AppVersion
     /**
      * Everything a client needs to render the version and its breakdown.
      *
-     * @return array{version: string, build: int, commit: string, full: string, committedAt: string|null, firstCommitAt: string|null, commitSpanDays: int|null, buildStartedAt: string|null, buildSpanDays: int|null, stats: array{total_commits: int, commit_additions: int, commit_deletions: int, build_additions: int, build_deletions: int, lifetime_additions: int, lifetime_deletions: int}}
+     * @return array{version: string, build: int, commit: string, full: string, committedAt: string|null, firstCommitAt: string|null, commitSpanDays: int|null, buildStartedAt: string|null, buildSpanDays: int|null, stats: array{total_commits: int, commit_additions: int, commit_deletions: int, build_additions: int, build_deletions: int, lifetime_additions: int, lifetime_deletions: int, lines: int, files: int}}
      */
     public static function toArray(): array
     {

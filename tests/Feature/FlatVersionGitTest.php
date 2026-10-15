@@ -22,7 +22,8 @@ it('keeps a real committed snapshot clean after recording it in Git', function (
     $source = $git(['rev-parse', 'HEAD']);
     $this->artisan('app:version', ['--flat' => true])->assertSuccessful();
     $snapshot = File::get(AppVersion::flatPath());
-    expect(json_decode($snapshot, true)['source_commit'])->toBe($source);
+    expect(json_decode($snapshot, true)['source_commit'])->toBe($source)
+        ->and(json_decode($snapshot, true)['stats'])->toMatchArray(['lines' => 2, 'files' => 2]);
     $git(['add', 'version-info.json']);
     $git(['commit', '-m', 'chore: record version snapshot']);
 

@@ -377,6 +377,8 @@ it('reads only the commits since the last run, with no walk over the whole histo
         "git log -z --format=@%H %cI %P --numstat {$head} ^{$deployed} --",
         'git diff-tree --stdin -r --name-only -- VERSION',
         "git log -1 --format=%cI {$bump}",
+        'git hash-object -t tree --stdin',
+        'git diff --numstat 4b825dc642cb6eb9a060e54bf8d69288fbee4904 HEAD',
         "git log --format=%s {$released}..HEAD",
     ])->and(statsFullWalks($commands))->toBe([])
         ->and(statsJson())->toMatchArray(['version' => '0.2.0', 'build' => 3])
@@ -817,6 +819,8 @@ it('falls back to the uncached collection in every mode when the cached read fai
         'git log --format= --numstat -1 HEAD' => Process::result(output: "10\t2\tapp/a.php\n"),
         'git log --format= --numstat version-file-sha..HEAD' => Process::result(output: "50\t5\tapp/a.php\n"),
         'git log --format= --numstat' => Process::result(output: "1000\t100\tapp/a.php\n"),
+        'git hash-object -t tree --stdin' => Process::result(output: "empty-tree\n"),
+        'git diff --numstat empty-tree HEAD' => Process::result(output: "900\t0\tapp/a.php\n"),
         '*' => Process::result(output: ''),
     ]);
 
@@ -828,6 +832,8 @@ it('falls back to the uncached collection in every mode when the cached read fai
             'build_additions' => 50,
             'lifetime_additions' => 1000,
             'commit_additions' => 10,
+            'lines' => 900,
+            'files' => 1,
         ])->and(File::exists($this->cachePath))->toBeFalse();
     };
 

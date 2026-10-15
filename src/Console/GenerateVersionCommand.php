@@ -121,6 +121,8 @@ class GenerateVersionCommand extends Command
             ['Lifetime additions', number_format($stats['lifetime_additions'])],
             ['Lifetime deletions', number_format($stats['lifetime_deletions'])],
             ['Total commits', number_format($stats['total_commits'])],
+            ['Lines', number_format($stats['lines'])],
+            ['Files', number_format($stats['files'])],
         ]);
 
         return self::SUCCESS;
@@ -175,8 +177,36 @@ class GenerateVersionCommand extends Command
             'committed_at' => $history !== null ? $history->committedAt() : $this->runTrimmed('git log -1 --format=%cI HEAD'),
             'first_commit_at' => $history !== null ? $history->firstCommitAt() : $this->firstCommitAt(),
             'build_started_at' => $build > 0 ? $this->buildStartedAt((string) $release['build_range']) : null,
-            'stats' => $history !== null ? $history->stats($release['stats_range']) : $this->gatherStats($release['stats_range']),
+            'stats' => [
+                ...($history !== null ? $history->stats($release['stats_range']) : $this->gatherStats($release['stats_range'])),
+                ...$this->treeSize(),
+            ],
         ];
+    }
+
+    /**
+     * Text lines and tracked files in HEAD's tree: one numstat against the
+     * empty tree, so binaries count as files but add no lines, as in every
+     * other total. Read whole on every run; it costs about half a second on
+     * a 9,000-file tree.
+     *
+     * @return array{lines: int, files: int}
+     */
+    protected function treeSize(): array
+    {
+        $emptyTree = Process::path(AppVersion::repositoryPath())->input('')->run('git hash-object -t tree --stdin');
+
+        if (! $emptyTree->successful() || trim($emptyTree->output()) === '') {
+            if ($this->requiresCompleteMetadata()) {
+                throw new RuntimeException('Unable to collect version statistics: git hash-object -t tree --stdin');
+            }
+
+            return ['lines' => 0, 'files' => 0];
+        }
+
+        [$lines, , $files] = $this->sumNumstat('git diff --numstat '.trim($emptyTree->output()).' HEAD');
+
+        return ['lines' => $lines, 'files' => $files];
     }
 
     /**
@@ -330,7 +360,7 @@ class GenerateVersionCommand extends Command
     }
 
     /**
-     * @return array{total_commits: int, commit_additions: int, commit_deletions: int, build_additions: int, build_deletions: int, lifetime_additions: int, lifetime_deletions: int}
+     * @return array{total_commits: int, commit_additions: int, commit_deletions: int, build_additions: int, build_deletions: int, lifetime_additions: int, lifetime_deletions: int, lines: int, files: int}
      */
     protected function gatherStats(?string $buildRange): array
     {
@@ -420,10 +450,10 @@ class GenerateVersionCommand extends Command
     }
 
     /**
-     * Sum the additions/deletions columns of a numstat listing. Binary files
-     * report "-" and are skipped.
+     * Sum the additions/deletions columns of a numstat listing, and count its
+     * entries. Binary files report "-" and add no lines.
      *
-     * @return array{0: int, 1: int}
+     * @return array{0: int, 1: int, 2: int}
      */
     protected function sumNumstat(string $command): array
     {
@@ -434,22 +464,29 @@ class GenerateVersionCommand extends Command
                 throw new RuntimeException("Unable to collect version statistics: {$command}");
             }
 
-            return [0, 0];
+            return [0, 0, 0];
         }
 
         $additions = 0;
         $deletions = 0;
+        $entries = 0;
 
         foreach (explode("\n", trim($result->output())) as $line) {
             $parts = preg_split('/\s+/', $line, 3) ?: [];
 
-            if (count($parts) >= 2 && $parts[0] !== '-') {
+            if (count($parts) < 2) {
+                continue;
+            }
+
+            $entries++;
+
+            if ($parts[0] !== '-') {
                 $additions += (int) $parts[0];
                 $deletions += (int) $parts[1];
             }
         }
 
-        return [$additions, $deletions];
+        return [$additions, $deletions, $entries];
     }
 
     /**
